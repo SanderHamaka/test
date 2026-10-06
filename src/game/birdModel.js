@@ -68,6 +68,14 @@ export function buildBirdModel(look) {
   twig.visible = false;
   head.add(twig);
 
+  // A morsel of food carried home to the chicks.
+  const morsel = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6).scale(1, 0.8, 1.6), new THREE.MeshStandardMaterial({
+    color: 0xc9a46a, roughness: 0.6,
+  }));
+  morsel.position.set(0, -0.05, -0.1 - beakLength * 0.85);
+  morsel.visible = false;
+  head.add(morsel);
+
   // Tail on its own joint so it can fan out and tilt.
   const tail = new THREE.Group();
   tail.position.set(0, 0.02, length * 0.42);
@@ -114,7 +122,7 @@ export function buildBirdModel(look) {
   });
   // Distance from the body's centre to the feet when standing, for perching on surfaces.
   const standHeight = (0.13 + 0.17) * look.scale;
-  return { root, rig: { wings, tail, head, legs, twig, standHeight } };
+  return { root, rig: { wings, tail, head, legs, twig, morsel, standHeight } };
 }
 
 /**

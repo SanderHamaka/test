@@ -60,6 +60,23 @@ export class Gameplay {
     this.reward(xp);
   }
 
+  /** The hawk struck: lose stamina and food, and drop whatever was in the beak. */
+  hawkHit() {
+    const bird = this.bird;
+    bird.stamina = Math.max(0, bird.stamina - bird.maxStamina * 0.4);
+    bird.speed *= 0.5;
+    bird.pitch = -0.5;
+    if (this.challenge) this.hunger = Math.max(0, this.hunger - 15);
+    const dropped = bird.carrying ? ' You dropped your branch.' : bird.carryingFood ? ' You dropped your food.' : '';
+    bird.carrying = bird.carryingFood = false;
+    this.notify(`The hawk got you!${dropped}`, 'danger');
+  }
+
+  hawkEscaped() {
+    this.notify('You shook off the hawk! +15 XP', 'discovery');
+    this.reward(15);
+  }
+
   pickedBranch() {
     if (this.progress.firstTime('branch')) {
       this.notify('You snapped off a branch! Land anywhere to drop it and start a nest.', 'hint-long');

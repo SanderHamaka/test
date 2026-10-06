@@ -53,10 +53,12 @@ export function generateDemoCity() {
   }
 
   const span = extent * (block + street);
-  for (let k = -extent; k <= extent; k++) {
-    const c = k * (block + street);
-    elements.push({ type: 'way', id: id++, tags: { highway: k === 0 ? 'primary' : 'residential' }, geometry: geometry([[c, -span], [c, span]]) });
-    elements.push({ type: 'way', id: id++, tags: { highway: k === 0 ? 'primary' : 'residential' }, geometry: geometry([[-span, c], [span, c]]) });
+  // Streets with a point at every crossing, like OSM, where crossing ways share a node.
+  const crossings = Array.from({ length: extent * 2 + 1 }, (_, i) => (i - extent) * (block + street));
+  for (const c of crossings) {
+    const highway = c === 0 ? 'primary' : 'residential';
+    elements.push({ type: 'way', id: id++, tags: { highway }, geometry: geometry(crossings.map((t) => [c, t])) });
+    elements.push({ type: 'way', id: id++, tags: { highway }, geometry: geometry(crossings.map((t) => [t, c])) });
   }
 
   for (let t = 0; t < 40; t++) {

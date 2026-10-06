@@ -53,6 +53,15 @@ export class Bird {
     this.rig.twig.visible = value;
   }
 
+  /** Whether food for the chicks is in the beak. */
+  get carryingFood() {
+    return this.rig.morsel.visible;
+  }
+
+  set carryingFood(value) {
+    this.rig.morsel.visible = value;
+  }
+
   get maxStamina() {
     return this.stats.stamina;
   }

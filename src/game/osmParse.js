@@ -52,7 +52,7 @@ export function parseOsm(elements, projection) {
       continue;
     }
     const line = classifyLine(tags);
-    if (line) result.lines.push({ ...line, points: projectFlat(el.geometry, projection) });
+    if (line) result.lines.push({ ...line, id: el.id, points: projectFlat(el.geometry, projection) });
   }
   return result;
 }

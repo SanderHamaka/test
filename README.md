@@ -26,6 +26,8 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | `Shift` (hold) | Dive: tuck wings, fast descent |
 | `E` | Land on the roof or ground below you; `Space` or `W` takes off again |
 | Mouse wheel | Camera distance |
+| `C` | Challenge board: start or abandon a challenge |
+| `M` | Sound on/off (volume is in the pause menu) |
 | `[` `]` | Time of day −/+ 30 minutes |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
 
@@ -46,6 +48,20 @@ Food comes from the real map: fish over water, insects over parks, seeds on fiel
 by snack bars, cafés and markets, mice in grassland. Fly through it to eat. Named landmarks (churches,
 towers, museums, stations, windmills…) show on the compass and under a faint beam of light; fly close to
 discover them. XP from food and discoveries raises your level. Progress is saved in the browser.
+
+**Challenges** are optional; press `C` to pick one:
+
+- *Street race*: fly through rings that follow real streets and canals before the clock runs out.
+- *Landmark sprint*: reach a named landmark in time.
+- *Feed the chicks*: with a home nest nearby, carry three meals home (food you fly through is carried
+  instead of eaten; land on the nest to deliver).
+
+**The hawk** (challenge mode) turns up every few minutes, circles high above you and dives when you're
+exposed in open sky. Get low between buildings, into a tree, or land, and it gives up; if it hits you,
+you lose stamina and food and drop whatever you were carrying.
+
+**Sound** is generated in the browser (no audio files): wind that rises with speed, wing beats, city hum,
+waves near water, birdsong near trees by day, crickets at night, and effects for everything you do.
 
 **Nests.** Fly through a tree to snap off a branch, then land anywhere to drop it. Branches dropped within
 2 m of each other grow into one nest, spiralling outwards and upwards. At 5 branches the nest becomes your
@@ -100,9 +116,12 @@ real coordinates, so they stay where you built them.
    and can skim across rooftops.
 6. **Birds** (`species.js`, `birdModel.js`, `portraits.js`): species definitions and procedural models with
    jointed wings, tail, head and legs, painted per species; the album portraits are rendered from them.
-7. **Game** (`gameplay.js`, `food.js`, `discoveries.js`, `nests.js`, `progress.js`): food placed per tile from
-   the map (`worldItems.js`), landmark discovery with compass and beams, nest building from tree branches,
-   rewards, hunger, levels and saving.
+7. **Game** (`gameplay.js`, `food.js`, `discoveries.js`, `nests.js`, `challenges.js`, `hawk.js`, `progress.js`):
+   food placed per tile from the map (`worldItems.js`), landmark discovery with compass and beams, nest
+   building from tree branches, races planned along the street and canal network, the hawk, rewards,
+   hunger, levels and saving.
+8. **Sound** (`sound.js`): Web Audio synthesis, with ambience driven by a coarse land-cover grid each tile
+   reads back from its painted ground.
 
 In development (`npm run dev`) the game is exposed as `window.__game` for poking at it from the console.
 
@@ -125,5 +144,5 @@ a commercial or self-hosted tile provider.
 - [ ] **Later visuals.** Distant low-detail terrain, street lights, weather and clouds, WebGPU renderer.
 - [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
       landmark discovery, XP and levels, challenge mode, touchdown landings, nest building and a home.
-- [ ] **Phase 4b.** Predators (hawk), optional challenges (races, deliveries), sound.
+- [x] **Phase 4b.** Hawk, optional challenges (street races, landmark sprints, feeding the chicks), sound.
 - [ ] **Phase 5: polish.** Touch and gamepad controls, settings, saving progress.

@@ -197,6 +197,19 @@ export class TileManager {
     return top;
   }
 
+  /** Share of water, green and built-up land in a ring of samples around a point (for ambience). */
+  surroundings(x, z, radius = 120) {
+    const share = { water: 0, green: 0, built: 0 };
+    const samples = [[0, 0], ...Array.from({ length: 8 }, (_, i) => [Math.cos(i * Math.PI / 4), Math.sin(i * Math.PI / 4)])];
+    for (const [dx, dz] of samples) {
+      const px = x + dx * radius, pz = z + dz * radius;
+      const cover = this.entryAt(px, pz)?.tile.coverAt(px, pz) ?? 0;
+      share[['built', 'water', 'green'][cover]] += 1 / samples.length;
+    }
+    share.trees = this.entryAt(x, z)?.tile.treesNear(x, z, 60) ?? 0;
+    return share;
+  }
+
   /** The tree crown containing a point, or null. */
   treeAt(x, y, z) {
     return this.entryAt(x, z)?.tile.treeAt(x, y, z) ?? null;

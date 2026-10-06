@@ -175,3 +175,26 @@ function addGrain(ctx, rect, size) {
   ctx.fillRect(0, 0, size, size);
   ctx.restore();
 }
+
+export const COVER_SIZE = 32;
+export const COVER = { built: 0, water: 1, green: 2 };
+
+/**
+ * A coarse land-cover grid (COVER_SIZE², row 0 = north edge) read back from the painted ground:
+ * water, green or built-up. Used for ambient sound. Returns null where canvases aren't available.
+ */
+export function coverGrid(bitmap) {
+  if (!bitmap || typeof OffscreenCanvas === 'undefined') return null;
+  const canvas = new OffscreenCanvas(COVER_SIZE, COVER_SIZE);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, COVER_SIZE, COVER_SIZE);
+  const pixels = ctx.getImageData(0, 0, COVER_SIZE, COVER_SIZE).data;
+  const [wr, wg, wb] = [1, 3, 5].map((i) => parseInt(WATER_COLOUR.slice(i, i + 2), 16));
+  const cover = new Uint8Array(COVER_SIZE * COVER_SIZE);
+  for (let i = 0; i < cover.length; i++) {
+    const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
+    if (Math.abs(r - wr) + Math.abs(g - wg) + Math.abs(b - wb) < 70) cover[i] = COVER.water;
+    else if (g > r + 6 && g > b + 6) cover[i] = COVER.green;
+  }
+  return cover;
+}

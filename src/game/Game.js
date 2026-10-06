@@ -9,6 +9,9 @@ import { FoodManager } from './food.js';
 import { Discoveries } from './discoveries.js';
 import { Gameplay } from './gameplay.js';
 import { Nests } from './nests.js';
+import { Hawk } from './hawk.js';
+import { Challenges } from './challenges.js';
+import { Sound } from './sound.js';
 import { Input } from './Input.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
@@ -46,7 +49,17 @@ export class Game {
     this.place = place;
     this.onHud = onHud;
     this.onStatus = onStatus;
-    this.onNotify = onNotify;
+    // Messages to the player, each with a matching sound.
+    this.onNotify = (text, kind) => {
+      onNotify(text, kind);
+      const sound = { food: 'eat', discovery: 'discover', level: 'level', danger: 'warning' }[kind];
+      if (sound) this.sound.play(sound);
+    };
+    this.sound = new Sound();
+    this.sound.unlock(); // allowed: the game starts right after a click
+    this.surroundings = null;
+    this.surroundingsTimer = 0;
+    this.lastBeat = 0;
     this.progress = progress;
     this.paused = false;
     this.ready = false;
@@ -79,7 +92,8 @@ export class Game {
     this.bird = new Bird(species);
     this.food = new FoodManager(this.scene, this.prepareMaterial);
     this.discoveries = new Discoveries(this.scene, progress);
-    this.gameplay = new Gameplay({ species, mode, progress, bird: this.bird, notify: onNotify });
+    this.gameplay = new Gameplay({ species, mode, progress, bird: this.bird, notify: this.onNotify });
+    this.hawk = this.gameplay.challenge ? new Hawk(this.scene, this.prepareMaterial) : null;
     this.bird.model.visible = false;
     this.scene.add(this.bird.model);
     this.bird.model.traverse((o) => o.material && this.prepareMaterial(o.material));
@@ -118,6 +132,10 @@ export class Game {
     });
 
     this.nests = new Nests(this.scene, this.prepareMaterial, this.progress, this.tiles.projection, elevation);
+    this.challenges = new Challenges(this.scene, this.prepareMaterial, {
+      tiles: this.tiles, nests: this.nests, discoveries: this.discoveries, species: this.bird.species,
+      notify: this.onNotify, reward: (xp) => this.gameplay.reward(xp), sound: this.sound,
+    });
 
     // Start at your nest if you have one near this place, otherwise above the place itself.
     this.spawnPoint = new THREE.Vector3(0, 0, 60);
@@ -168,6 +186,7 @@ export class Game {
 
   setPaused(paused) {
     this.paused = paused;
+    this.sound.setPaused(paused);
   }
 
   // ---- Time of day ----
@@ -252,6 +271,7 @@ export class Game {
       this.reportHud(dt);
     }
     this.lighting.follow(this.bird.position, this.camera.position);
+    if (this.ready) this.updateSound(this.paused ? 0 : dt);
 
     if (this.composer) {
       const night = this.lighting.uniforms.night.value;
@@ -266,28 +286,101 @@ export class Game {
     }
   }
 
-  /** One step of game logic: flight, food, discoveries and rules. */
+  updateSound(dt) {
+    const bird = this.bird;
+    const p = bird.position;
+    this.surroundingsTimer -= dt;
+    if (this.surroundingsTimer <= 0) {
+      this.surroundingsTimer = 0.5;
+      this.surroundings = this.tiles.surroundings(p.x, p.z);
+    }
+    // A wing beat starts each time the flap cycle wraps round.
+    const beat = Math.floor(bird.anim.phase / (Math.PI * 2));
+    const flapped = beat !== this.lastBeat && (bird.flapping || bird.state === 'landing');
+    this.lastBeat = beat;
+    this.sound.update(dt, {
+      speed: bird.speed,
+      flapping: bird.flapping,
+      beat: flapped,
+      diving: bird.anim.tuck > 0.5,
+      perched: bird.state === 'perched',
+      height: p.y - this.tiles.groundAt(p.x, p.z),
+      surroundings: this.surroundings,
+      night: this.lighting.uniforms.night.value,
+    });
+  }
+
+  /** One step of game logic: flight, food, discoveries, nests, the hawk, challenges and rules. */
   simulate(dt, input) {
     this.elapsed = (this.elapsed ?? 0) + dt;
-    const events = this.bird.update(dt, input, this.tiles);
+    const bird = this.bird;
+    const events = bird.update(dt, input, this.tiles);
     this.buildNest(events);
     this.food.sync(this.tiles);
     this.discoveries.sync(this.tiles);
-    const eaten = this.food.update(this.elapsed, this.bird);
-    const found = this.discoveries.update(dt, this.bird);
+
+    // While feeding the chicks, the first food flown through is carried home instead of eaten.
+    let eaten = this.food.update(this.elapsed, bird);
+    if (eaten.length && this.challenges.wantsFood(bird)) {
+      bird.carryingFood = true;
+      this.onNotify(`Carrying ${eaten[0] === 'mice' ? 'a mouse' : eaten[0]}: land on your nest to feed the chicks`, 'hint');
+      eaten = eaten.slice(1);
+    }
+    const found = this.discoveries.update(dt, bird);
     if (this.gameplay.update(dt, events, eaten, found).faint) this.respawn();
-    if (events.bump) this.shake = 1;
+    this.challenges.update(dt, bird, events);
+    this.updateHawk(dt);
+
+    if (events.bump) {
+      this.shake = 1;
+      this.sound.play('bump');
+    }
     if (events.hardLanding) this.shake = 0.5;
+    if (events.landed) this.sound.play('land');
     Object.assign(this.hudFlags, events);
+  }
+
+  updateHawk(dt) {
+    if (!this.hawk) return;
+    const h = this.hawk.update(dt, this.bird, this.tiles);
+    if (h.appeared) {
+      this.onNotify('A hawk is circling overhead. Stay low, or near trees and roofs!', 'danger');
+      this.sound.play('hawk');
+    }
+    if (h.dive) {
+      this.onNotify('The hawk is diving! Get low or into a tree!', 'danger');
+      this.sound.play('hawk');
+    }
+    if (h.hit) {
+      this.gameplay.hawkHit();
+      this.sound.play('hit');
+      this.shake = 1.2;
+    }
+    if (h.escaped) this.gameplay.hawkEscaped();
+  }
+
+  // ---- Challenges (started from the challenge board) ----
+
+  challengeOffers() {
+    return this.challenges.offers(this.bird);
+  }
+
+  startChallenge(offer) {
+    this.challenges.start(offer, this.bird);
+  }
+
+  cancelChallenge() {
+    this.challenges.cancel();
   }
 
   /** Flying through a tree snaps off a branch; landing with one drops it into (or starts) a nest. */
   buildNest(events) {
     const bird = this.bird;
     const p = bird.position;
-    if (bird.state === 'flying' && !bird.carrying && this.tiles.treeAt(p.x, p.y, p.z)) {
+    if (bird.state === 'flying' && !bird.carrying && !bird.carryingFood && this.tiles.treeAt(p.x, p.y, p.z)) {
       bird.carrying = true;
       this.gameplay.pickedBranch();
+      this.sound.play('branch');
     }
     if (events.landed && bird.carrying) {
       bird.carrying = false;
@@ -295,17 +388,27 @@ export class Game {
     }
   }
 
-  /** Compass entry for the home nest, if there is one within range. */
-  homeMark() {
-    const home = this.nests.homeNear(this.bird.position, 5000);
-    if (!home) return null;
-    const dx = home.position.x - this.bird.position.x, dz = home.position.z - this.bird.position.z;
+  /** A compass entry for a world position: distance and bearing relative to the bird's heading. */
+  compassMark(position, fields) {
+    const dx = position.x - this.bird.position.x, dz = position.z - this.bird.position.z;
     const heading = Math.atan2(-dx, -dz);
     return {
-      id: 'home', name: 'Your nest', kind: 'Home', home: true,
+      ...fields,
       distance: Math.hypot(dx, dz),
       relative: Math.atan2(Math.sin(this.bird.yaw - heading), Math.cos(this.bird.yaw - heading)),
     };
+  }
+
+  /** Compass entry for the home nest, if there is one within range. */
+  homeMark() {
+    const home = this.nests.homeNear(this.bird.position, 5000);
+    return home ? this.compassMark(home.position, { id: 'home', name: 'Your nest', kind: 'Home', home: true }) : null;
+  }
+
+  /** Compass entry for the active challenge's target. */
+  targetMark() {
+    const target = this.challenges.target(this.bird);
+    return target ? this.compassMark(target.position, { id: 'target', name: target.name, kind: 'Challenge', target: true }) : null;
   }
 
   placeCamera(snap, dt = 0) {
@@ -353,7 +456,10 @@ export class Game {
       canLand: this.bird.state === 'flying' && p.y - this.tiles.surfaceAt(p.x, p.z) < LAND_RANGE,
       level: this.progress.level,
       levelProgress: this.progress.levelProgress,
-      compass: [this.homeMark(), ...this.discoveries.compass].filter(Boolean),
+      compass: [this.targetMark(), this.homeMark(), ...this.discoveries.compass].filter(Boolean),
+      challenge: this.challenges.status,
+      hawk: this.hawk?.alarm ?? null,
+      carryingFood: this.bird.carryingFood,
       carrying: this.bird.carrying,
       yaw: this.bird.yaw,
     });
@@ -370,6 +476,9 @@ export class Game {
     this.food.dispose();
     this.discoveries.dispose();
     this.nests?.dispose();
+    this.challenges?.dispose();
+    this.hawk?.dispose();
+    this.sound.dispose();
     this.progress.flush();
     this.disposeComposer();
     this.lighting.dispose();

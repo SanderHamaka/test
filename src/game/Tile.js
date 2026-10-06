@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Colliders } from './Colliders.js';
 import { createGridSampler } from './terrain.js';
-import { WATER_COLOUR } from './groundPainter.js';
+import { COVER_SIZE, WATER_COLOUR } from './groundPainter.js';
 
 const TREE_CELL = 12;
 
@@ -53,6 +53,8 @@ export class Tile {
     this.stats = data.stats;
     this.food = data.food ?? new Float32Array(0);
     this.landmarks = data.landmarks ?? [];
+    this.cover = data.cover ?? null;
+    this.routes = data.routes ?? [];
     this.owned = [];
 
     const group = new THREE.Group();
@@ -95,6 +97,30 @@ export class Tile {
       if (!this.crownGrid.has(key)) this.crownGrid.set(key, []);
       this.crownGrid.get(key).push(crown);
     }
+  }
+
+  /** Land cover at a point (see COVER in groundPainter.js), or 0 (built-up) when unknown. */
+  coverAt(x, z) {
+    if (!this.cover) return 0;
+    const r = this.rect;
+    const i = Math.min(COVER_SIZE - 1, Math.max(0, Math.floor(((x - r.minX) / (r.maxX - r.minX)) * COVER_SIZE)));
+    const j = Math.min(COVER_SIZE - 1, Math.max(0, Math.floor(((z - r.minZ) / (r.maxZ - r.minZ)) * COVER_SIZE)));
+    return this.cover[j * COVER_SIZE + i];
+  }
+
+  /** Number of tree crowns within `radius` metres of a point (horizontally), up to `max`. */
+  treesNear(x, z, radius, max = 50) {
+    let count = 0;
+    const cells = Math.ceil(radius / TREE_CELL);
+    const gx = Math.floor(x / TREE_CELL), gz = Math.floor(z / TREE_CELL);
+    for (let dx = -cells; dx <= cells; dx++) {
+      for (let dz = -cells; dz <= cells; dz++) {
+        for (const c of this.crownGrid.get(`${gx + dx},${gz + dz}`) ?? []) {
+          if (Math.hypot(x - c.x, z - c.z) < radius && ++count >= max) return count;
+        }
+      }
+    }
+    return count;
   }
 
   /** The tree crown containing a point, or null. */

@@ -13,6 +13,9 @@
   let paused = $state(false);
   let showHelp = $state(true);
   let notes = $state([]);
+  let board = $state(null); // challenge offers while the board is open
+  let volume = $state(+loadSetting('volume', '0.7'));
+  let muted = $state(false);
   let hideHelpTimer;
   let noteId = 0;
 
@@ -41,7 +44,14 @@
         }
       },
     });
+    game.sound.setVolume(volume);
+    // Browsers only start audio after a gesture; any key or click will do.
+    const unlock = () => game.sound.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
     return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
       clearTimeout(bumpTimer);
       game.dispose();
     };
@@ -83,6 +93,34 @@
     saveSetting('quality', value);
   }
 
+  function setVolume(value) {
+    volume = value;
+    game.sound.setVolume(value);
+    saveSetting('volume', String(value));
+  }
+
+  function openBoard() {
+    board = game.challengeOffers();
+    game.setPaused(true);
+  }
+
+  function closeBoard() {
+    board = null;
+    game.setPaused(false);
+  }
+
+  function startChallenge(offer) {
+    game.startChallenge(offer);
+    closeBoard();
+  }
+
+  function abandonChallenge() {
+    game.cancelChallenge();
+    closeBoard();
+  }
+
+  const formatSeconds = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
   function setHour(value) {
     hour = value;
     game.setSolarHour(value);
@@ -103,6 +141,19 @@
 
   function onkeydown(e) {
     if (status.state !== 'ready') return;
+    if (board) {
+      if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') closeBoard();
+      return;
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      if (!paused) openBoard();
+      return;
+    }
+    if (e.key === 'm' || e.key === 'M') {
+      muted = game.sound.toggleMute();
+      notify(muted ? 'Sound off (M)' : 'Sound on (M)', 'hint');
+      return;
+    }
     if (e.key === 'Escape') setPaused(!paused);
     else if (e.key === 'h' || e.key === 'H') showHelp = !showHelp;
     else if (e.key === '[' || e.key === ']') {
@@ -141,11 +192,25 @@
         {/if}
       {/each}
       {#each hud.compass as mark, i (mark.id)}
-        <span class="mark" class:home={mark.home} class:nearest={i === 0 || (i === 1 && hud.compass[0].home)} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
+        <span class="mark" class:home={mark.home} class:target={mark.target} class:nearest={i === 0 || mark.home || mark.target} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
           <i></i>
           <small>{mark.name}<br />{formatDistance(mark.distance)}</small>
         </span>
       {/each}
+    </div>
+  {/if}
+
+  {#if hud.challenge}
+    <div class="challenge" class:urgent={hud.challenge.timeLeft < 15}>
+      <b>{hud.challenge.title}</b>
+      <span>{hud.challenge.detail}</span>
+      <span class="clock">{formatSeconds(hud.challenge.timeLeft)}</span>
+    </div>
+  {/if}
+
+  {#if hud.hawk}
+    <div class="hawk" class:diving={hud.hawk === 'diving'}>
+      {hud.hawk === 'diving' ? 'Hawk diving! Get low!' : 'Hawk overhead'}
     </div>
   {/if}
 
@@ -165,6 +230,9 @@
 
   {#if status.state === 'ready'}
     <div class="meters">
+      {#if hud.carryingFood}
+        <div class="prompt">Carrying food for the chicks · land on your nest</div>
+      {/if}
       {#if hud.carrying}
         <div class="prompt">Carrying a branch · land to drop it (within 2 m of a nest to add to it)</div>
       {/if}
@@ -203,12 +271,32 @@
       <div>Come down onto a roof (or press <kbd>E</kbd>) to land</div>
       <div>Fly through food to eat · follow the compass to discover places</div>
       <div>Fly through a tree for a branch, then land to build a nest</div>
+      <div><kbd>C</kbd> challenges · <kbd>M</kbd> sound on/off</div>
       <div><kbd>[</kbd><kbd>]</kbd> time of day · scroll to zoom</div>
       <div><kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>
     </div>
   {/if}
 
-  {#if paused}
+  {#if board}
+    <div class="pause board">
+      <h2>Challenges</h2>
+      {#if hud.challenge}
+        <p>Busy with <b>{hud.challenge.title}</b> ({hud.challenge.detail}).</p>
+        <button onclick={abandonChallenge}>Abandon it</button>
+        <button class="secondary" onclick={closeBoard}>Keep going</button>
+      {:else}
+        <div class="offers">
+          {#each board as offer (offer.type)}
+            <button class="offer" disabled={!offer.available} onclick={() => startChallenge(offer)}>
+              <b>{offer.title}</b>
+              <span>{offer.text}</span>
+            </button>
+          {/each}
+        </div>
+        <button class="secondary" onclick={closeBoard}>Back to flying</button>
+      {/if}
+    </div>
+  {:else if paused}
     <div class="pause">
       <h2>Paused</h2>
       <div class="settings">
@@ -217,6 +305,10 @@
           <input type="range" min="0" max="23.99" step="0.25" value={hour} oninput={(e) => setHour(+e.currentTarget.value)} />
         </label>
         <button class="link" onclick={resetTime}>Use the real time there now</button>
+        <label>
+          <span>Volume <b>{muted ? 'muted' : `${Math.round(volume * 100)}%`}</b></span>
+          <input type="range" min="0" max="1" step="0.05" value={volume} oninput={(e) => setVolume(+e.currentTarget.value)} />
+        </label>
         <label>
           <span>Graphics</span>
           <select value={quality} onchange={(e) => setQuality(e.currentTarget.value)}>
@@ -401,8 +493,96 @@
     transform: rotate(45deg);
   }
 
+  .mark.target i {
+    background: #ff8a3d;
+    box-shadow: 0 0 10px #ff8a3d;
+    width: 12px;
+    height: 12px;
+  }
+
   .mark.edge i {
     opacity: 0.5;
+  }
+
+  .challenge {
+    position: absolute;
+    top: 112px;
+    left: 16px;
+    display: grid;
+    gap: 0.1rem;
+    padding: 0.55rem 0.8rem;
+    border-left: 3px solid #ff8a3d;
+    border-radius: 10px;
+    background: #0d1a27b3;
+    backdrop-filter: blur(6px);
+    color: #fff;
+    font-size: 0.9rem;
+  }
+
+  .challenge .clock {
+    font-size: 1.3rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .challenge.urgent .clock {
+    color: #ff6b5b;
+  }
+
+  .hawk {
+    position: absolute;
+    top: 76px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    background: #7a2a1fcc;
+    color: #fff;
+    font-weight: 600;
+    pointer-events: none;
+  }
+
+  .hawk.diving {
+    background: #d63a2b;
+    animation: pulse-bg 0.5s ease-in-out infinite alternate;
+  }
+
+  @keyframes pulse-bg {
+    to {
+      transform: translateX(-50%) scale(1.08);
+    }
+  }
+
+  .board p {
+    margin: 0 0 0.6rem;
+  }
+
+  .offers {
+    display: grid;
+    gap: 0.6rem;
+    width: min(520px, calc(100vw - 32px));
+    margin-bottom: 0.4rem;
+  }
+
+  .pause .offer {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 0;
+    padding: 0.8rem 1rem;
+    border-radius: 12px;
+    background: #fffdf8;
+    color: #1d2a36;
+    font-weight: 400;
+    text-align: left;
+  }
+
+  .pause .offer b {
+    font-size: 1.05rem;
+  }
+
+  .pause .offer:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .notes {

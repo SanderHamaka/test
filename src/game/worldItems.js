@@ -99,3 +99,17 @@ function clippedBounds(ring, rect) {
   minZ = Math.max(minZ, rect.minZ); maxZ = Math.min(maxZ, rect.maxZ);
   return minX < maxX && minZ < maxZ ? { minX, minZ, maxX, maxZ } : null;
 }
+
+const RACE_ROADS = new Set(['trunk', 'primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'pedestrian']);
+const RACE_WATER = new Set(['canal', 'river']);
+
+/**
+ * Streets and waterways that races can follow: [{ id, kind, points }] in world coordinates. Each way
+ * belongs to the tile holding its first point, so it is sent once.
+ */
+export function ownedRoutes(features, rect) {
+  return features.lines
+    .filter((l) => (l.kind === 'road' && RACE_ROADS.has(l.type)) || (l.kind === 'waterway' && RACE_WATER.has(l.type)))
+    .filter((l) => l.points[0] >= rect.minX && l.points[0] < rect.maxX && l.points[1] >= rect.minZ && l.points[1] < rect.maxZ)
+    .map((l) => ({ id: l.id, kind: l.kind, points: new Float32Array(l.points) }));
+}
