@@ -1,6 +1,8 @@
 /** Slippy-map tile maths (Web Mercator, the scheme used by OSM and terrain tile servers). */
 
 export const TILE_ZOOM = 15;
+/** Map data is downloaded per block: one tile at this zoom covers 2×2 tiles at TILE_ZOOM. */
+export const BLOCK_ZOOM = TILE_ZOOM - 1;
 
 export function lonLatToTile(lat, lon, z = TILE_ZOOM) {
   const n = 2 ** z;

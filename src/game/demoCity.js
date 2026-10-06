@@ -72,6 +72,25 @@ export function generateDemoCity() {
     geometry: closed(rect(-span - 200, span + 8, (span + 200) * 2, 100)),
   });
 
+  // A residential street west of town: a terrace of narrow houses and a few detached ones.
+  const streetZ = -200;
+  elements.push({ type: 'way', id: id++, tags: { highway: 'residential' }, geometry: geometry([[-span - 260, streetZ], [-span - 20, streetZ]]) });
+  for (let i = 0; i < 18; i++) {
+    const x = -span - 250 + i * 5.6;
+    elements.push({ type: 'way', id: id++, tags: { building: 'house' }, geometry: closed(rect(x, streetZ - 16, 5.6, 9.5)) });
+  }
+  for (let i = 0; i < 6; i++) {
+    const x = -span - 250 + i * 38;
+    elements.push({ type: 'way', id: id++, tags: { building: 'house' }, geometry: closed(rect(x, streetZ + 8, 11, 8)) });
+  }
+  elements.push({ type: 'way', id: id++, tags: { building: 'yes', 'roof:shape': 'pyramidal' }, geometry: closed(rect(-span - 60, streetZ + 8, 12, 12)) });
+
+  // Coast to the south: drawn west to east, so the land is on the left (north) and the sea on the right.
+  const coast = [];
+  for (let x = -4000; x <= 4000; x += 50) coast.push([x, 1650 + Math.sin(x / 300) * 120 + Math.sin(x / 90) * 20]);
+  elements.push({ type: 'way', id: id++, tags: { natural: 'coastline' }, geometry: geometry(coast) });
+  elements.push({ type: 'way', id: id++, tags: { natural: 'beach' }, geometry: closed([[-4000, 1500], [4000, 1500], [4000, 1640], [-4000, 1640]]) });
+
   // Bridge carrying the main road over the canal, then on into the countryside.
   const bridgeStart = span, bridgeEnd = span + 95;
   elements.push({ type: 'way', id: id++, tags: { highway: 'primary', bridge: 'yes', layer: '1' }, geometry: geometry([[0, bridgeStart], [0, bridgeEnd]]) });

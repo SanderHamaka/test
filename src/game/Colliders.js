@@ -1,5 +1,9 @@
+import { roofHeightAt } from './roofs.js';
+
 const CELL = 40;
-const STRIDE = 8; // firstRing, ringCount, bottom, top, minX, minZ, maxX, maxZ
+// Per building: firstRing, ringCount, bottom, eave, minX, minZ, maxX, maxZ,
+// then the roof frame (see roofs.js): shape, height, ox, oz, px, pz, halfA, halfB.
+const STRIDE = 16;
 
 /** Spatial grid over building footprints for fast "am I inside a building?" tests. */
 export class Colliders {
@@ -22,7 +26,7 @@ export class Colliders {
     }
   }
 
-  /** Buildings whose footprint contains (x, z). Calls fn(bottom, top, index) for each. */
+  /** Buildings whose footprint contains (x, z). Calls fn(bottom, top, index) for each; top follows the roof. */
   forEachAt(x, z, fn) {
     const cell = this.grid.get(Math.floor(x / CELL) * 65536 + Math.floor(z / CELL));
     if (!cell) return;
@@ -30,8 +34,18 @@ export class Colliders {
     for (const i of cell) {
       const o = i * STRIDE;
       if (x < b[o + 4] || x > b[o + 6] || z < b[o + 5] || z > b[o + 7]) continue;
-      if (this.contains(i, x, z)) fn(b[o + 2], b[o + 3], i);
+      if (this.contains(i, x, z)) fn(b[o + 2], this.roofAt(o, x, z), i);
     }
+  }
+
+  roofAt(o, x, z) {
+    const b = this.buildings;
+    this.frame ??= {};
+    const f = Object.assign(this.frame, {
+      shape: b[o + 8], eave: b[o + 3], height: b[o + 9], ox: b[o + 10], oz: b[o + 11],
+      px: b[o + 12], pz: b[o + 13], halfA: b[o + 14], halfB: b[o + 15],
+    });
+    return roofHeightAt(f, x, z);
   }
 
   /** Even-odd test over all rings, so courtyards (holes) count as outside. */

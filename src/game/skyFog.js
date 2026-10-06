@@ -10,8 +10,18 @@ const SAMPLE_ELEVATION = THREE.MathUtils.degToRad(0.8);
  */
 export class SkyFog {
   constructor(renderer, sky) {
-    this.texture = sampleHorizon(renderer, sky);
+    this.texture = new THREE.DataTexture(sampleHorizon(renderer, sky), SAMPLES, 1, THREE.RGBAFormat, THREE.HalfFloatType);
+    this.texture.wrapS = THREE.RepeatWrapping;
+    this.texture.magFilter = THREE.LinearFilter;
+    this.texture.minFilter = THREE.LinearFilter;
+    this.texture.needsUpdate = true;
     this.uniform = { value: this.texture };
+  }
+
+  /** Re-samples the horizon, e.g. after the sun has moved. */
+  update(renderer, sky) {
+    this.texture.image.data.set(sampleHorizon(renderer, sky));
+    this.texture.needsUpdate = true;
   }
 
   /** Patches a material so its fog uses the horizon texture. Safe to call on materials with their own onBeforeCompile. */
@@ -51,7 +61,10 @@ export class SkyFog {
   }
 }
 
-/** Renders a narrow view just above the horizon at evenly spaced azimuths and averages each into a texel. */
+/**
+ * Renders a narrow view just above the horizon at evenly spaced azimuths and averages each into a texel.
+ * Returns half-float RGBA data (half floats keep HDR values and filter linearly on every WebGL2 device).
+ */
 function sampleHorizon(renderer, sky) {
   const size = 4;
   const target = new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType });
@@ -81,13 +94,7 @@ function sampleHorizon(renderer, sky) {
   parent?.add(sky);
   target.dispose();
 
-  // Half floats keep HDR values and can be filtered linearly on every WebGL2 device.
   const half = new Uint16Array(data.length);
   for (let i = 0; i < data.length; i++) half[i] = THREE.DataUtils.toHalfFloat(data[i]);
-  const texture = new THREE.DataTexture(half, SAMPLES, 1, THREE.RGBAFormat, THREE.HalfFloatType);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
+  return half;
 }

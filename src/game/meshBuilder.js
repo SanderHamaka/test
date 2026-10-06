@@ -1,6 +1,7 @@
 import earcut from 'earcut';
 import { buildingHeights, hash01, parseColour, pointInRing, ringArea } from './osmParse.js';
 import { GRID, createGridSampler } from './terrain.js';
+import { FLAT, PYRAMIDAL, chooseRoof, clipRingToSide, orientedBox, roofFrame, roofHeightAt, splitRingAtRidge } from './roofs.js';
 
 const MAX_TREES_PER_TILE = 12000;
 const SKIRT_DEPTH = 12;
@@ -113,7 +114,7 @@ export function buildTile(features, rect, elevationAt) {
   };
 }
 
-function addBuilding({ rings, tags }, rect, cx, cz, groundAt, mesh, colliders) {
+function addBuilding({ rings, tags, measured }, rect, cx, cz, groundAt, mesh, colliders) {
   const outer = rings[0];
   if (outer.length < 6) return false;
 
@@ -132,37 +133,57 @@ function addBuilding({ rings, tags }, rect, cx, cz, groundAt, mesh, colliders) {
   for (let i = 0; i < outer.length; i += 2) ground = Math.min(ground, groundAt(outer[i], outer[i + 1]));
 
   const rnd = hash01(outer[0], outer[1]);
-  const { height, minHeight } = buildingHeights(tags, area, rnd);
-  const bottom = minHeight > 0.5 ? ground + minHeight : ground - 0.6;
-  const top = ground + height;
   const type = tags.building ?? tags['building:part'];
-  const isHouse = /^(house|detached|semidetached_house|terrace|bungalow)$/.test(type);
+  const box = orientedBox(outer);
+  const roof = chooseRoof(tags, type, area, box, rings, measured?.slanted);
+  const h = buildingHeights(tags, area, rnd, roof.height, measured);
+  if (h.top - h.eave < 0.5) roof.shape = FLAT;
+
+  const bottom = h.minHeight > 0.5 ? ground + h.minHeight : ground - 0.6;
+  const eave = ground + h.eave;
+  const frame = roofFrame({ ...roof, height: h.top - h.eave }, box, eave);
+  const isHouse = /^(house|detached|semidetached_house|terrace|bungalow)$/.test(type) || roof.shape !== FLAT;
 
   const wallBase = parseColour(tags['building:colour']) ?? WALL_PALETTE[Math.floor(rnd * WALL_PALETTE.length)];
   const wall = srgbToLinear(scaleColour(wallBase, 0.92 + hash01(outer[1], outer[0]) * 0.12));
   const roofBase = parseColour(tags['roof:colour']) ??
     (isHouse ? HOUSE_ROOFS[Math.floor(rnd * HOUSE_ROOFS.length)] : scaleColour(FLAT_ROOF, 0.85 + rnd * 0.3));
-  const roof = srgbToLinear(roofBase);
+  const roofColour = srgbToLinear(roofBase);
 
-  const levels = Math.max(1, Math.round((height - minHeight) / 3.2));
-  const floorHeight = (height - minHeight) / levels;
-  const windows = !NO_WINDOWS.has(type) && height - minHeight > 2.5;
+  const levels = Math.max(1, Math.round((h.eave - h.minHeight) / 3));
+  const floorHeight = (h.eave - h.minHeight) / levels;
+  const windows = !NO_WINDOWS.has(type) && h.eave - h.minHeight > 2.5;
+  const floorBase = ground + h.minHeight;
 
-  const local = rings.map((ring) => ring.map((v, i) => (i % 2 ? v - cz : v - cx)));
-  for (let r = 0; r < local.length; r++) {
-    addWalls(mesh, local[r], r > 0, bottom, top, wall, windows ? floorHeight : 0, ground + minHeight);
+  // Rendering is relative to the tile centre; the roof frame is in world coordinates.
+  const toLocal = (ring) => ring.map((v, i) => (i % 2 ? v - cz : v - cx));
+  const topAt = (lx, lz) => roofHeightAt(frame, lx + cx, lz + cz);
+  const walls = { bottom, colour: wall, floorHeight: windows ? floorHeight : 0, floorBase, eave, topAt };
+
+  if (frame.shape === FLAT) {
+    const local = rings.map(toLocal);
+    local.forEach((ring, r) => addWalls(mesh, ring, r > 0, walls));
+    addFlatCap(mesh, local, eave, 1, roofColour);
+  } else {
+    addWalls(mesh, toLocal(splitRingAtRidge(outer, frame)), false, walls);
+    if (frame.shape === PYRAMIDAL) addPyramid(mesh, toLocal(outer), frame, cx, cz, roofColour);
+    else addGable(mesh, outer, frame, cx, cz, roofColour);
   }
-  addFlatCap(mesh, local, top, 1, roof);
-  if (minHeight > 0.5) addFlatCap(mesh, local, bottom, -1, wall);
+  if (h.minHeight > 0.5) addFlatCap(mesh, rings.map(toLocal), bottom, -1, wall);
 
-  colliders.add(rings, bottom, top);
+  colliders.add(rings, bottom, frame);
   return true;
 }
 
-/** Walls along one ring. `floorBase` is where the first floor starts, so window rows line up with floors. */
-function addWalls(mesh, ring, isHole, bottom, top, colour, floorHeight, floorBase) {
+/**
+ * Walls along one ring, from `bottom` up to the roof (topAt gives the height at each corner).
+ * Facade coordinates are in "window cells": u counts bays along the wall, v counts floors from floorBase.
+ * The flag is 0.5 for a plain wall, or 1 + the number of window rows below the eaves.
+ */
+function addWalls(mesh, ring, isHole, { bottom, colour, floorHeight, floorBase, eave, topAt }) {
   const n = ring.length / 2;
   const orientation = (ringArea(ring) > 0 ? 1 : -1) * (isHole ? -1 : 1);
+  const rows = floorHeight ? (eave - floorBase) / floorHeight : 0;
 
   for (let i = 0; i < n; i++) {
     const ax = ring[i * 2], az = ring[i * 2 + 1];
@@ -174,21 +195,60 @@ function addWalls(mesh, ring, isHole, bottom, top, colour, floorHeight, floorBas
 
     const nx = (orientation * dz) / len;
     const nz = (orientation * -dx) / len;
+    const topA = topAt(ax, az), topB = topAt(bx, bz);
 
-    // Facade coordinates are in "window cells": u counts window bays along the wall, v counts floors.
     const bays = floorHeight && len > 2 ? Math.max(1, Math.round(len / 3.4)) : 0;
-    const flag = bays ? 1 : 0.5;
-    const v0 = floorHeight ? (bottom - floorBase) / floorHeight : 0;
-    const v1 = floorHeight ? (top - floorBase) / floorHeight : 0;
+    const flag = bays ? 1 + rows : 0.5;
+    const cell = (y) => (floorHeight ? (y - floorBase) / floorHeight : 0);
 
     const base = mesh.vertexCount;
-    mesh.vertex(ax, bottom, az, nx, 0, nz, colour, 0, v0, flag);
-    mesh.vertex(bx, bottom, bz, nx, 0, nz, colour, bays, v0, flag);
-    mesh.vertex(bx, top, bz, nx, 0, nz, colour, bays, v1, flag);
-    mesh.vertex(ax, top, az, nx, 0, nz, colour, 0, v1, flag);
+    mesh.vertex(ax, bottom, az, nx, 0, nz, colour, 0, cell(bottom), flag);
+    mesh.vertex(bx, bottom, bz, nx, 0, nz, colour, bays, cell(bottom), flag);
+    mesh.vertex(bx, topB, bz, nx, 0, nz, colour, bays, cell(topB), flag);
+    mesh.vertex(ax, topA, az, nx, 0, nz, colour, 0, cell(topA), flag);
 
     if (orientation > 0) mesh.index.push(base, base + 2, base + 1, base, base + 3, base + 2);
     else mesh.index.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+
+/** Two roof planes: the footprint is cut along the ridge and each half is tilted. */
+function addGable(mesh, outer, f, cx, cz, colour) {
+  const k = f.height / f.halfA; // slope
+  for (const sign of [1, -1]) {
+    const half = clipRingToSide(outer, f, sign);
+    if (!half) continue;
+    const triangles = earcut(half, null, 2);
+    const nl = Math.hypot(k, 1);
+    const nx = (sign * f.px * k) / nl, ny = 1 / nl, nz = (sign * f.pz * k) / nl;
+    const base = mesh.vertexCount;
+    for (let i = 0; i < half.length; i += 2) {
+      mesh.vertex(half[i] - cx, roofHeightAt(f, half[i], half[i + 1]), half[i + 1] - cz, nx, ny, nz, colour);
+    }
+    pushUpFacing(mesh, half, triangles, base);
+  }
+}
+
+/** Triangles from each footprint edge up to the apex. */
+function addPyramid(mesh, ring, f, cx, cz, colour) {
+  const apex = [f.ox - cx, f.eave + f.height, f.oz - cz];
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const a = [ring[i * 2], f.eave, ring[i * 2 + 1]];
+    const b = [ring[j * 2], f.eave, ring[j * 2 + 1]];
+    mesh.quad(a, b, apex, apex, colour, [0, 1, 0]);
+  }
+}
+
+/** Adds earcut triangles over a flat-indexed 2D polygon, wound to face upwards. */
+function pushUpFacing(mesh, flat, triangles, base) {
+  for (let t = 0; t < triangles.length; t += 3) {
+    const a = triangles[t], b = triangles[t + 1], c = triangles[t + 2];
+    const cross = (flat[c * 2] - flat[a * 2]) * (flat[b * 2 + 1] - flat[a * 2 + 1]) -
+      (flat[b * 2] - flat[a * 2]) * (flat[c * 2 + 1] - flat[a * 2 + 1]);
+    if (cross > 0) mesh.index.push(base + a, base + b, base + c);
+    else mesh.index.push(base + a, base + c, base + b);
   }
 }
 
@@ -421,17 +481,20 @@ class ColliderData {
   constructor() {
     this.coords = [];
     this.rings = []; // pairs: start (in coords), length
-    this.buildings = []; // per building: firstRing, ringCount, bottom, top, minX, minZ, maxX, maxZ
+    this.buildings = []; // per building, see Colliders.js for the layout
   }
 
-  add(rings, bottom, top) {
+  add(rings, bottom, f) {
     const outer = rings[0];
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
     for (let i = 0; i < outer.length; i += 2) {
       minX = Math.min(minX, outer[i]); maxX = Math.max(maxX, outer[i]);
       minZ = Math.min(minZ, outer[i + 1]); maxZ = Math.max(maxZ, outer[i + 1]);
     }
-    this.buildings.push(this.rings.length / 2, rings.length, bottom, top, minX, minZ, maxX, maxZ);
+    this.buildings.push(
+      this.rings.length / 2, rings.length, bottom, f.eave, minX, minZ, maxX, maxZ,
+      f.shape, f.height, f.ox ?? 0, f.oz ?? 0, f.px ?? 0, f.pz ?? 0, f.halfA ?? 1, f.halfB ?? 1,
+    );
     for (const ring of rings) {
       this.rings.push(this.coords.length, ring.length);
       for (let i = 0; i < ring.length; i++) this.coords.push(ring[i]);

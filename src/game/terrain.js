@@ -10,7 +10,11 @@ const SIZE = 256;
 // coasts, so depths are clamped; -12 m still leaves room for polders below sea level.
 const MIN_ELEVATION = -12;
 
-/** Elevation grid for one tile, or null when it can't be fetched (callers then use flat ground). */
+/**
+ * Elevation grid for one tile, or null when it can't be fetched (callers then use flat ground).
+ * The array also gets a `deepFraction` property: the share of samples well below sea level, which
+ * tells open sea apart from polders when a tile has no coastline in it.
+ */
 export async function fetchTerrarium(z, x, y) {
   try {
     const response = await fetch(`${TERRARIUM_URL}/${z}/${x}/${y}.png`);
@@ -25,10 +29,13 @@ export async function fetchTerrarium(z, x, y) {
     const pixels = context.getImageData(0, 0, SIZE, SIZE).data;
 
     const heights = new Float32Array(SIZE * SIZE);
+    let deep = 0;
     for (let i = 0; i < heights.length; i++) {
       const e = pixels[i * 4] * 256 + pixels[i * 4 + 1] + pixels[i * 4 + 2] / 256 - 32768;
+      if (e < -8) deep++;
       heights[i] = Math.max(e, MIN_ELEVATION);
     }
+    heights.deepFraction = deep / heights.length;
     return heights;
   } catch {
     return null;

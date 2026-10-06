@@ -15,7 +15,7 @@ const WATERWAY_WIDTHS = { river: 18, canal: 10, stream: 3, ditch: 1.5, drain: 1.
 const RAIL_WIDTHS = { rail: 4, narrow_gauge: 3, light_rail: 3.5, tram: 3, subway: 4 };
 
 export function parseOsm(elements, projection) {
-  const result = { buildings: [], areas: [], lines: [], trees: [] };
+  const result = { buildings: [], areas: [], lines: [], trees: [], coastlines: [] };
 
   for (const el of elements) {
     const tags = el.tags ?? {};
@@ -39,6 +39,10 @@ export function parseOsm(elements, projection) {
     }
 
     if (el.type !== 'way' || !el.geometry) continue;
+    if (tags.natural === 'coastline') {
+      result.coastlines.push(projectFlat(el.geometry, projection));
+      continue;
+    }
     const line = classifyLine(tags);
     if (line) result.lines.push({ ...line, points: projectFlat(el.geometry, projection) });
   }
@@ -186,7 +190,7 @@ export function hash01(x, z) {
   return s - Math.floor(s);
 }
 
-const LEVEL_HEIGHT = 3.2;
+const LEVEL_HEIGHT = 3.0;
 
 function parseMetres(value) {
   if (value == null) return NaN;
@@ -195,42 +199,69 @@ function parseMetres(value) {
   return /ft|'/.test(value) ? n * 0.3048 : n;
 }
 
-/** Height and base height of a building in metres, estimated from tags, type and footprint size. */
-export function buildingHeights(tags, area, rnd) {
-  let height = parseMetres(tags.height);
-  if (Number.isNaN(height) && tags['building:levels']) {
-    const levels = parseFloat(tags['building:levels']) + (parseFloat(tags['roof:levels']) || 0) * 0.6;
-    if (!Number.isNaN(levels)) height = levels * LEVEL_HEIGHT + 1;
-  }
-  if (Number.isNaN(height) || height <= 0) height = estimateHeight(tags.building ?? tags['building:part'], area, rnd);
+/**
+ * Vertical extent of a building in metres above its ground: { eave, top, minHeight }.
+ * eave is where the walls end and the roof starts; for flat roofs eave === top.
+ * Sources, best first: measured heights (e.g. 3D BAG), height tags, levels, an estimate from type and size.
+ *
+ * @param roofHeight  height of the roof shape chosen for this building (0 for flat)
+ * @param measured    optional { top, eave } in metres above ground
+ */
+export function buildingHeights(tags, area, rnd, roofHeight, measured) {
+  let eave, top;
+  const taggedRoof = parseMetres(tags['roof:height']);
+  const roof = Number.isNaN(taggedRoof) ? roofHeight : roofHeight ? taggedRoof : 0;
+  const height = parseMetres(tags.height);
+  const levels = parseFloat(tags['building:levels']);
 
+  if (measured) {
+    top = measured.top;
+    eave = roofHeight ? Math.min(top, Math.max(measured.eave ?? top - roof, top * 0.35)) : top;
+  } else if (height > 0) {
+    top = height;
+    eave = Math.max(top - roof, top * 0.35);
+  } else if (levels > 0) {
+    eave = levels * LEVEL_HEIGHT + 0.6;
+    const roofLevels = parseFloat(tags['roof:levels']);
+    top = eave + (roof ? (roofLevels > 0 && Number.isNaN(taggedRoof) ? roofLevels * 2.8 : roof) : 0);
+  } else {
+    eave = estimateWallHeight(tags.building ?? tags['building:part'], area, rnd);
+    top = eave + roof;
+  }
+
+  top = Math.min(top, 900);
   let minHeight = parseMetres(tags.min_height);
   if (Number.isNaN(minHeight)) minHeight = (parseFloat(tags['building:min_level']) || 0) * LEVEL_HEIGHT;
-
-  return { height: Math.min(height, 900), minHeight: Math.min(minHeight, height - 0.5) };
+  return { eave: Math.min(eave, top), top, minHeight: Math.min(minHeight, eave - 0.5) };
 }
 
-function estimateHeight(type, area, rnd) {
+/** Wall height (to the eaves) when nothing is tagged. Deliberately modest: most buildings are low. */
+function estimateWallHeight(type, area, rnd) {
   switch (type) {
-    case 'garage': case 'garages': case 'shed': case 'carport': case 'hut': case 'kiosk':
-      return 2.6 + rnd;
-    case 'roof':
-      return 4;
-    case 'house': case 'detached': case 'semidetached_house': case 'terrace': case 'bungalow':
-      return 6 + rnd * 4;
+    case 'garage': case 'garages': case 'shed': case 'carport': case 'hut': case 'kiosk': case 'roof':
+      return 2.6 + rnd * 0.6;
+    case 'bungalow':
+      return 3 + rnd * 0.5;
+    case 'house': case 'detached': case 'semidetached_house': case 'terrace':
+      return 5.4 + rnd * 1.2;
+    case 'farm': case 'barn': case 'farm_auxiliary': case 'stable': case 'cowshed':
+      return 3.5 + rnd * 2;
     case 'apartments':
-      return 12 + rnd * 15;
+      return 9 + rnd * 9;
     case 'office': case 'commercial': case 'hotel':
-      return 14 + rnd * 25;
+      return 10 + rnd * 14;
     case 'industrial': case 'warehouse': case 'retail': case 'supermarket':
-      return 7 + rnd * 5;
-    case 'church': case 'cathedral':
-      return 18 + rnd * 10;
+      return 6 + rnd * 4;
+    case 'school': case 'university': case 'hospital': case 'public': case 'civic':
+      return 8 + rnd * 6;
+    case 'church': case 'cathedral': case 'chapel':
+      return 10 + rnd * 6;
   }
-  if (area < 60) return 3 + rnd * 2;
-  if (area < 200) return 7 + rnd * 5;
-  if (area < 1000) return 10 + rnd * 10;
-  return 12 + rnd * 12;
+  if (area < 30) return 2.6 + rnd * 0.6;
+  if (area < 150) return 5.4 + rnd * 1.2;
+  if (area < 400) return 6 + rnd * 3;
+  if (area < 1500) return 7 + rnd * 5;
+  return 8 + rnd * 6;
 }
 
 const NAMED_COLOURS = {

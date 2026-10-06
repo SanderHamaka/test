@@ -1,30 +1,38 @@
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Bird } from './Bird.js';
 import { Input } from './Input.js';
-import { SkyFog } from './skyFog.js';
+import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
+import { atSolarHours, solarHours } from './sun.js';
 
-const SUN_ELEVATION = 38;
-const SUN_AZIMUTH = 30; // degrees from south (+z) towards east (+x)
-const SHADOW_EXTENT = 170;
-const SHADOW_MAP_SIZE = 2048;
-// The sky box follows the camera; its corners must stay inside the camera's far plane.
-const SKY_SIZE = 18000;
 // Fully fogged just before the edge of the loaded tiles, so they never show a hard border.
 const FOG_NEAR = 450;
 const FOG_FAR = LOAD_DISTANCE + 100;
+
+/** Graphics presets: render resolution, shadow detail and post-processing. */
+export const QUALITY = {
+  low: { label: 'Low', pixelRatio: 1, shadowMapSize: 1024, post: false, ao: false, bloom: false },
+  medium: { label: 'Medium', pixelRatio: 1.5, shadowMapSize: 2048, post: true, ao: false, bloom: true },
+  high: { label: 'High', pixelRatio: 2, shadowMapSize: 4096, post: true, ao: true, bloom: true },
+};
 
 export class Game {
   /**
    * @param canvas    canvas element to render into
    * @param place     { lat, lon } to fly over
    * @param demo      use the generated offline demo city instead of OSM
-   * @param onHud     called ~10x per second with { altitude, speed, bump, tiles }
+   * @param quality   key of QUALITY
+   * @param onHud     called ~10x per second with { altitude, speed, bump, tiles, time }
    * @param onStatus  called with { state: 'loading' | 'ready' | 'error', message }
    */
-  constructor(canvas, place, { demo = false, onHud = () => {}, onStatus = () => {} } = {}) {
+  constructor(canvas, place, { demo = false, quality = 'high', onHud = () => {}, onStatus = () => {} } = {}) {
     this.canvas = canvas;
+    this.place = place;
     this.onHud = onHud;
     this.onStatus = onStatus;
     this.paused = false;
@@ -34,11 +42,10 @@ export class Game {
     this.shake = 0;
     this.hudTimer = 0;
     this.hudFlags = {};
+    this.date = new Date(); // the real time at the place, until the player changes it
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.5;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
@@ -47,19 +54,18 @@ export class Game {
     this.camera.position.set(0, 80, 80);
     this.camera.lookAt(0, 60, 0);
 
-    this.sunDirection = new THREE.Vector3().setFromSphericalCoords(
-      1, THREE.MathUtils.degToRad(90 - SUN_ELEVATION), THREE.MathUtils.degToRad(SUN_AZIMUTH),
-    );
-    this.setupSky();
-    this.setupLights();
+    this.lighting = new Lighting(this.renderer, this.scene, { lat: place.lat, lon: place.lon });
+    this.lighting.setFogDistances(FOG_NEAR, FOG_FAR);
+    this.lighting.setTime(this.date);
+
+    this.prepareMaterial = (material) => {
+      this.lighting.skyFog.apply(material);
+      return material;
+    };
 
     this.bird = new Bird();
     this.bird.model.visible = false;
     this.scene.add(this.bird.model);
-    this.prepareMaterial = (material) => {
-      this.skyFog.apply(material);
-      return material;
-    };
     this.bird.model.traverse((o) => o.material && this.prepareMaterial(o.material));
 
     this.input = new Input();
@@ -69,6 +75,7 @@ export class Game {
     };
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
 
+    this.setQuality(quality);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas);
     this.resize();
@@ -90,19 +97,16 @@ export class Game {
       renderer: this.renderer,
       scene: this.scene,
       prepareMaterial: this.prepareMaterial,
+      uniforms: this.lighting.uniforms,
       onChange: () => this.reportTileStatus(),
     });
 
-    try {
-      const spawnPoint = new THREE.Vector3(0, 0, 60);
-      await this.tiles.whenReady(spawnPoint);
-      if (this.disposed) return;
-      this.spawn(spawnPoint);
-      this.ready = true;
-      this.onStatus({ state: 'ready' });
-    } catch (error) {
-      if (!this.disposed) this.onStatus({ state: 'error', message: error.message });
-    }
+    const spawnPoint = new THREE.Vector3(0, 0, 60);
+    await this.tiles.whenReady(spawnPoint);
+    if (this.disposed) return;
+    this.spawn(spawnPoint);
+    this.ready = true;
+    this.onStatus({ state: 'ready' });
   }
 
   reportTileStatus() {
@@ -112,52 +116,6 @@ export class Game {
       state: 'loading',
       message: error ? `Map server busy, retrying… (${error})` : 'Downloading map data from OpenStreetMap…',
     });
-  }
-
-  setupSky() {
-    const sky = new Sky();
-    sky.scale.setScalar(SKY_SIZE);
-    const u = sky.material.uniforms;
-    u.turbidity.value = 4;
-    u.rayleigh.value = 1.4;
-    u.mieCoefficient.value = 0.0025;
-    u.mieDirectionalG.value = 0.8;
-    u.sunPosition.value.copy(this.sunDirection);
-    this.scene.add(sky);
-    this.sky = sky;
-
-    // Image-based lighting from the same sky, so reflections and ambient light match it.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    const skyScene = new THREE.Scene();
-    const skyCopy = new Sky();
-    skyCopy.scale.setScalar(SKY_SIZE);
-    skyCopy.material.uniforms = THREE.UniformsUtils.clone(u);
-    skyScene.add(skyCopy);
-    this.envTarget = pmrem.fromScene(skyScene);
-    this.scene.environment = this.envTarget.texture;
-    this.scene.environmentIntensity = 0.45;
-    pmrem.dispose();
-    skyCopy.geometry.dispose();
-    skyCopy.material.dispose();
-
-    // Fog fades into the sky's horizon colour (from SkyFog); THREE.Fog only provides the distances.
-    this.scene.fog = new THREE.Fog(0xffffff, FOG_NEAR, FOG_FAR);
-    this.skyFog = new SkyFog(this.renderer, sky);
-  }
-
-  setupLights() {
-    this.scene.add(new THREE.HemisphereLight(0xcfe0f5, 0x6b6450, 0.3));
-
-    const sun = new THREE.DirectionalLight(0xfff0dd, 3.4);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    Object.assign(sun.shadow.camera, {
-      left: -SHADOW_EXTENT, right: SHADOW_EXTENT, top: SHADOW_EXTENT, bottom: -SHADOW_EXTENT, near: 1, far: 2000,
-    });
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.6;
-    this.scene.add(sun, sun.target);
-    this.sun = sun;
   }
 
   /** Start above the tallest building near the spawn point, facing north. */
@@ -176,10 +134,70 @@ export class Game {
     this.paused = paused;
   }
 
+  // ---- Time of day ----
+
+  /** Local solar time at the place, in hours. */
+  get solarHour() {
+    return solarHours(this.date, this.place.lon);
+  }
+
+  setSolarHour(hours) {
+    this.date = atSolarHours(this.date, this.place.lon, hours);
+    this.lighting.setTime(this.date);
+  }
+
+  nudgeTime(minutes) {
+    this.date = new Date(this.date.getTime() + minutes * 60000);
+    this.lighting.setTime(this.date);
+  }
+
+  resetTime() {
+    this.date = new Date();
+    this.lighting.setTime(this.date);
+  }
+
+  // ---- Graphics quality ----
+
+  setQuality(key) {
+    const q = QUALITY[key] ?? QUALITY.high;
+    this.quality = q;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
+    this.lighting.setShadowMapSize(q.shadowMapSize);
+
+    this.disposeComposer();
+    this.gtao = this.bloom = null;
+    if (q.post) {
+      // Multisampled half-float target: keeps antialiasing and HDR values until the final output pass.
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+      this.composer = new EffectComposer(this.renderer, target);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      if (q.ao) {
+        this.gtao = new GTAOPass(this.scene, this.camera, 1, 1);
+        this.gtao.updateGtaoMaterial({ radius: 3, distanceExponent: 1.5, thickness: 2, scale: 1 });
+        this.gtao.blendIntensity = 0.85;
+        this.composer.addPass(this.gtao);
+      }
+      if (q.bloom) {
+        this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.4, 0.35, 0.9);
+        this.composer.addPass(this.bloom);
+      }
+      this.composer.addPass(new OutputPass());
+    }
+    this.resize();
+  }
+
+  disposeComposer() {
+    this.composer?.passes.forEach((pass) => pass.dispose?.());
+    this.composer?.dispose();
+    this.composer = null;
+  }
+
   resize() {
     const { clientWidth: w, clientHeight: h } = this.canvas;
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
+    this.composer?.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -191,15 +209,28 @@ export class Game {
     if (this.tiles) this.tiles.update(this.ready ? this.bird.position : { x: 0, z: 60 }, this.paused ? 0 : dt);
 
     if (this.ready && !this.paused) {
+      this.date = new Date(this.date.getTime() + dt * 1000);
+      this.lighting.setTime(this.date);
+
       const events = this.bird.update(dt, this.input.state, this.tiles);
       if (events.bump) this.shake = 1;
       Object.assign(this.hudFlags, events);
       this.placeCamera(false, dt);
-      this.updateShadowCamera();
       this.reportHud(dt);
     }
-    this.sky.position.copy(this.camera.position);
-    this.renderer.render(this.scene, this.camera);
+    this.lighting.follow(this.bird.position, this.camera.position);
+
+    if (this.composer) {
+      const night = this.lighting.uniforms.night.value;
+      if (this.bloom) {
+        // Bloom is for lights at night; by day the bright sky would just haze everything.
+        this.bloom.enabled = night > 0.05;
+        this.bloom.strength = 0.4 * night;
+      }
+      this.composer.render(dt);
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   placeCamera(snap, dt = 0) {
@@ -229,20 +260,6 @@ export class Game {
     }
   }
 
-  /** Keeps the shadow map centred on the bird, snapped to whole texels so shadows don't shimmer. */
-  updateShadowCamera() {
-    const lz = this.sunDirection;
-    const lx = new THREE.Vector3(0, 1, 0).cross(lz).normalize();
-    const ly = lz.clone().cross(lx);
-    const texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
-    const p = this.bird.position;
-    const u = Math.round(p.dot(lx) / texel) * texel;
-    const v = Math.round(p.dot(ly) / texel) * texel;
-    const center = lx.multiplyScalar(u).addScaledVector(ly, v).addScaledVector(lz, p.dot(lz));
-    this.sun.target.position.copy(center);
-    this.sun.position.copy(center).addScaledVector(lz, 800);
-  }
-
   reportHud(dt) {
     this.hudTimer += dt;
     if (this.hudTimer < 0.1) return;
@@ -253,6 +270,7 @@ export class Game {
       speed: this.bird.speed * 3.6,
       bump: !!this.hudFlags.bump,
       tiles: this.tiles.status,
+      time: this.solarHour,
     });
     this.hudFlags = {};
   }
@@ -264,10 +282,8 @@ export class Game {
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.input.dispose();
     this.tiles?.dispose();
-    this.envTarget.dispose();
-    this.skyFog.dispose();
-    this.sky.geometry.dispose();
-    this.sky.material.dispose();
+    this.disposeComposer();
+    this.lighting.dispose();
     this.bird.model.traverse((o) => {
       if (o.isMesh) {
         o.geometry.dispose();

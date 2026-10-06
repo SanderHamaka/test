@@ -5,12 +5,14 @@ import { WATER_COLOUR } from './groundPainter.js';
 
 /** Materials and geometries shared by every tile, created once per game. */
 export class TileResources {
-  constructor(renderer, prepareMaterial) {
+  /** @param uniforms shared uniforms, e.g. { night } from Lighting */
+  constructor(renderer, prepareMaterial, uniforms) {
     this.prepareMaterial = prepareMaterial;
+    this.uniforms = uniforms;
     this.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
     this.time = { value: 0 };
 
-    this.buildingMaterial = prepareMaterial(createBuildingMaterial());
+    this.buildingMaterial = prepareMaterial(createBuildingMaterial(uniforms));
     this.bridgeMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
     this.flatGroundMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ color: 0xa5a98c, roughness: 1 }));
 
@@ -28,7 +30,7 @@ export class TileResources {
     texture.anisotropy = this.anisotropy;
     texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.needsUpdate = true;
-    const material = this.prepareMaterial(createTerrainMaterial(texture, this.time));
+    const material = this.prepareMaterial(createTerrainMaterial(texture, this.time, this.uniforms));
     return { material, owned: [material, texture] };
   }
 
@@ -44,7 +46,6 @@ export class TileResources {
 export class Tile {
   constructor(data, resources) {
     this.rect = data.rect;
-    this.flatTerrain = data.flatTerrain;
     this.colliders = new Colliders(data.colliders);
     this.groundAt = createGridSampler(data.rect, data.heights);
     this.stats = data.stats;
@@ -135,36 +136,67 @@ function geometry(buffers) {
 }
 
 /**
- * Standard PBR material with procedural windows. The "facade" attribute holds
- * (bays along the wall, floors up the wall, flag); flag 1 = draw windows, 0.5 = plain wall, 0 = roof.
+ * Standard PBR material with procedural windows. The "facade" attribute holds (bays along the wall,
+ * floors up the wall, flag); flag 0 = roof, 0.5 = plain wall, 1 + n = a wall with n window rows.
+ * Each building picks a window style from its colour; at night a random share of windows is lit.
  */
-function createBuildingMaterial() {
+function createBuildingMaterial(uniforms) {
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.night = uniforms.night;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec3 facade;\nvarying vec3 vFacade;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = facade;');
+      .replace('#include <common>', '#include <common>\nattribute vec3 facade;\nvarying vec3 vFacade;\nvarying vec3 vWallNormal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = facade;\nvWallNormal = normal;');
 
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vFacade;')
+      .replace('#include <common>', `#include <common>
+        varying vec3 vFacade;
+        varying vec3 vWallNormal;
+        uniform float night;
+        float hash1(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float windowMask = 0.0;
+        float windowLit = 0.0;
+        float windowFade = 0.0;
         if (vFacade.z > 0.75) {
           vec2 cell = vFacade.xy;
           vec2 f = fract(cell);
           vec2 w = fwidth(cell);
-          vec2 lo = vec2(0.2, 0.3);
-          vec2 hi = vec2(0.8, 0.85);
+          // Hash inputs are rounded: interpolated varyings differ slightly per pixel, and a hash
+          // would turn those tiny differences into a different style for every pixel.
+          vec3 buildingId = floor(vColor.rgb * 1023.0 + 0.5);
+          float style = hash1(buildingId * 0.137);
+          // Classic punched windows, tall narrow ones, or wide ribbon windows.
+          vec2 lo = style < 0.4 ? vec2(0.2, 0.3) : style < 0.75 ? vec2(0.3, 0.16) : vec2(0.06, 0.34);
+          vec2 hi = style < 0.4 ? vec2(0.8, 0.85) : style < 0.75 ? vec2(0.7, 0.9) : vec2(0.94, 0.8);
           vec2 m = smoothstep(lo - w, lo + w, f) * (1.0 - smoothstep(hi - w, hi + w, f));
+          vec2 frameLo = lo - 0.05, frameHi = hi + 0.05;
+          vec2 fm = smoothstep(frameLo - w, frameLo + w, f) * (1.0 - smoothstep(frameHi - w, frameHi + w, f));
           // Fade the pattern out where it would alias, darkening the wall to the pattern's average instead.
-          float fade = smoothstep(0.2, 0.55, max(w.x, w.y));
-          windowMask = m.x * m.y * (1.0 - fade) * step(0.0, cell.y);
+          windowFade = smoothstep(0.2, 0.55, max(w.x, w.y));
+          // Only window rows that fit between the ground floor and the eaves (flag = 1 + rows).
+          float rowFits = step(0.0, cell.y) * step(floor(cell.y) + 1.0, vFacade.z - 1.0 + 0.2);
+          float detail = (1.0 - windowFade) * rowFits;
+          windowFade *= rowFits; // gables above the eaves have no windows, near or far
+          windowMask = m.x * m.y * detail;
+          // Frames are thin: only draw them while they're several pixels wide, or they sparkle.
+          float frame = (fm.x * fm.y - m.x * m.y) * detail * (1.0 - smoothstep(0.03, 0.07, max(w.x, w.y)));
+          float wallId = dot(buildingId, vec3(0.17, 0.59, 0.83)) + dot(floor(vWallNormal.xz * 8.0 + 0.5), vec2(3.1, 5.7));
+          windowLit = step(hash1(vec3(floor(cell), wallId)), 0.38);
           vec3 glass = vec3(0.025, 0.035, 0.05);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.74, 0.7), frame * 0.6);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, windowMask);
-          diffuseColor.rgb *= mix(1.0, 0.72, fade);
+          diffuseColor.rgb *= mix(1.0, 0.72, windowFade);
         }`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.1, windowMask);')
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.5, windowMask);');
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.5, windowMask);')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        if (vFacade.z > 0.75) {
+          vec3 warm = vec3(1.0, 0.72, 0.42);
+          // Up close: individual lit windows. Far away: the average glow of a lit facade.
+          float glow = windowLit * windowMask + 0.07 * windowFade;
+          totalEmissiveRadiance += warm * glow * night * 1.1;
+        }`);
   };
   return material;
 }
@@ -175,21 +207,29 @@ const WATER_LINEAR = new THREE.Color(WATER_COLOUR); // THREE.Color converts the 
  * Terrain with the painted ground texture. Pixels in the exact water colour become glossy,
  * gently rippling water that reflects the sky.
  */
-function createTerrainMaterial(texture, time) {
+function createTerrainMaterial(texture, time, uniforms) {
   const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.95 });
   material.onBeforeCompile = (shader) => {
     shader.uniforms.waterTime = time;
+    shader.uniforms.night = uniforms.night;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvWaterWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
 
     const w = WATER_LINEAR;
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;\nuniform float waterTime;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;\nuniform float waterTime;\nuniform float night;')
       .replace('#include <map_fragment>', `#include <map_fragment>
         const vec3 waterColour = vec3(${w.r.toFixed(5)}, ${w.g.toFixed(5)}, ${w.b.toFixed(5)});
         float waterMask = 1.0 - smoothstep(0.02, 0.06, distance(diffuseColor.rgb, waterColour));
-        diffuseColor.rgb = mix(diffuseColor.rgb, waterColour * 0.75, waterMask);`)
+        diffuseColor.rgb = mix(diffuseColor.rgb, waterColour * 0.75, waterMask);
+        // Asphalt is a dark neutral grey: give it a faint sodium street-light glow at night.
+        vec3 c = diffuseColor.rgb;
+        float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+        float roadMask = (1.0 - smoothstep(0.012, 0.03, sat)) * smoothstep(0.03, 0.045, lum) * (1.0 - smoothstep(0.13, 0.17, lum)) * (1.0 - waterMask);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += vec3(1.0, 0.6, 0.28) * roadMask * night * 0.05;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.05, waterMask);')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         if (waterMask > 0.0) {

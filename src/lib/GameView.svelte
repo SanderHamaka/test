@@ -1,12 +1,14 @@
 <script>
   import { onMount } from 'svelte';
-  import { Game } from '../game/Game.js';
+  import { Game, QUALITY } from '../game/Game.js';
 
   let { place, demo = false, onexit } = $props();
 
   let canvas;
   let game;
-  let hud = $state({ altitude: 0, speed: 0, bump: false, tiles: null });
+  let hud = $state({ altitude: 0, speed: 0, bump: false, tiles: null, time: null });
+  let quality = $state(loadSetting('quality', 'high'));
+  let hour = $state(12);
   let status = $state({ state: 'loading', message: 'Preparing…' });
   let paused = $state(false);
   let showHelp = $state(true);
@@ -22,6 +24,7 @@
   onMount(() => {
     game = new Game(canvas, place, {
       demo,
+      quality,
       onStatus: (next) => (status = next),
       onHud(next) {
         hud = next;
@@ -38,15 +41,54 @@
     };
   });
 
+  function loadSetting(key, fallback) {
+    try {
+      return localStorage.getItem(`fly.${key}`) ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function saveSetting(key, value) {
+    try {
+      localStorage.setItem(`fly.${key}`, value);
+    } catch {
+      // Storage unavailable (private mode): the setting just won't be remembered.
+    }
+  }
+
   function setPaused(value) {
     paused = value;
     game.setPaused(value);
+    if (value) hour = game.solarHour;
   }
+
+  function setQuality(value) {
+    quality = value;
+    game.setQuality(value);
+    saveSetting('quality', value);
+  }
+
+  function setHour(value) {
+    hour = value;
+    game.setSolarHour(value);
+  }
+
+  function resetTime() {
+    game.resetTime();
+    hour = game.solarHour;
+  }
+
+  const formatHour = (h) => `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`;
 
   function onkeydown(e) {
     if (status.state !== 'ready') return;
     if (e.key === 'Escape') setPaused(!paused);
     else if (e.key === 'h' || e.key === 'H') showHelp = !showHelp;
+    else if (e.key === '[' || e.key === ']') {
+      game.nudgeTime(e.key === ']' ? 30 : -30);
+      hour = game.solarHour;
+    }
   }
 </script>
 
@@ -60,6 +102,7 @@
     <div class="stats">
       <span><b>{Math.round(hud.altitude)}</b> m</span>
       <span><b>{Math.round(hud.speed)}</b> km/h</span>
+      {#if hud.time != null}<span title="Local solar time">{formatHour(hud.time)}</span>{/if}
     </div>
   </div>
 
@@ -86,13 +129,29 @@
       <div><kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> bank &amp; turn</div>
       <div><kbd>W</kbd><kbd>S</kbd> / <kbd>↑</kbd><kbd>↓</kbd> climb &amp; descend</div>
       <div><kbd>Space</kbd> flap &nbsp; <kbd>Shift</kbd> dive</div>
-      <div>Scroll to zoom · <kbd>H</kbd> help · <kbd>Esc</kbd> pause</div>
+      <div><kbd>[</kbd><kbd>]</kbd> time of day · scroll to zoom</div>
+      <div><kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>
     </div>
   {/if}
 
   {#if paused}
     <div class="pause">
       <h2>Paused</h2>
+      <div class="settings">
+        <label>
+          <span>Time of day <b>{formatHour(hour)}</b></span>
+          <input type="range" min="0" max="23.99" step="0.25" value={hour} oninput={(e) => setHour(+e.currentTarget.value)} />
+        </label>
+        <button class="link" onclick={resetTime}>Use the real time there now</button>
+        <label>
+          <span>Graphics</span>
+          <select value={quality} onchange={(e) => setQuality(e.currentTarget.value)}>
+            {#each Object.entries(QUALITY) as [key, q] (key)}
+              <option value={key}>{q.label}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
       <button onclick={() => setPaused(false)}>Resume</button>
       <button class="secondary" onclick={onexit}>Choose another place</button>
     </div>
@@ -102,6 +161,9 @@
 
   <div class="attribution">
     © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>
+    {#if hud.tiles?.heightSource === '3D BAG'}
+      · Heights © <a href="https://3dbag.nl" target="_blank" rel="noreferrer">3DBAG</a> by tudelft3d and 3DGI
+    {/if}
   </div>
 </div>
 
@@ -304,6 +366,50 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+  }
+
+  .settings {
+    display: grid;
+    gap: 0.6rem;
+    min-width: 280px;
+    margin-bottom: 0.6rem;
+    padding: 0.9rem 1rem;
+    border-radius: 12px;
+    background: #ffffff14;
+    text-align: left;
+  }
+
+  .settings label {
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .settings label span {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+  }
+
+  .settings input[type='range'] {
+    width: 100%;
+    accent-color: #f0b429;
+  }
+
+  .settings select {
+    padding: 0.4rem 0.5rem;
+    border: none;
+    border-radius: 8px;
+    font: inherit;
+  }
+
+  .pause .settings button.link {
+    min-width: 0;
+    padding: 0;
+    background: none;
+    color: #f0b429;
+    font-weight: 400;
+    text-align: left;
+    text-decoration: underline;
   }
 
   .pause button.secondary {

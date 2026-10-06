@@ -5,6 +5,7 @@
  */
 
 import { ringArea } from './osmParse.js';
+import { SEA_MASK_SIZE } from './sea.js';
 
 export const GROUND_TEXTURE_SIZE = 1024;
 
@@ -35,7 +36,7 @@ const PATH_COLOURS = {
   steps: '#bdb8b0', pedestrian: '#d3cbbd',
 };
 
-export function paintGround(features, rect, size = GROUND_TEXTURE_SIZE) {
+export function paintGround(features, rect, seaMask = null, size = GROUND_TEXTURE_SIZE) {
   if (typeof OffscreenCanvas === 'undefined') return null;
 
   const canvas = new OffscreenCanvas(size, size);
@@ -62,6 +63,7 @@ export function paintGround(features, rect, size = GROUND_TEXTURE_SIZE) {
   addGrain(ctx, rect, size);
 
   // Water goes on top of the grain so it keeps its exact colour.
+  if (seaMask) paintSea(ctx, seaMask, size);
   for (const area of areas) if (area.kind === 'water') fillPolygon(ctx, area.rings, WATER_COLOUR);
   const lines = features.lines.filter((l) => !l.bridge);
   for (const line of lines) if (line.kind === 'waterway') strokeLine(ctx, line.points, WATER_COLOUR, line.width);
@@ -96,6 +98,26 @@ export function paintGround(features, rect, size = GROUND_TEXTURE_SIZE) {
   ctx.setLineDash([]);
 
   return canvas.transferToImageBitmap();
+}
+
+/** Scales the sea mask up onto the ground; smoothing gives the shoreline soft edges. */
+function paintSea(ctx, mask, size) {
+  const n = SEA_MASK_SIZE;
+  const canvas = new OffscreenCanvas(n, n);
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(n, n);
+  const [r, gr, b] = [1, 3, 5].map((i) => parseInt(WATER_COLOUR.slice(i, i + 2), 16));
+  for (let k = 0; k < mask.length; k++) {
+    if (!mask[k]) continue;
+    image.data.set([r, gr, b, 255], k * 4);
+  }
+  g.putImageData(image, 0, 0);
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(canvas, 0, 0, size, size);
+  ctx.restore();
 }
 
 function tracePolygon(ctx, rings) {
