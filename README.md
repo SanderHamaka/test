@@ -13,6 +13,9 @@ npm run dev      # http://localhost:5173
 npm run build    # production build in dist/
 ```
 
+`npm run dev` and `npm run preview` also run the multiplayer relay (on `/relay`), so flying together works
+out of the box on your machine and your local network.
+
 The game needs network access to the map services in the browser (see below). The **offline demo city**
 button on the start screen runs the same pipeline on generated data, which is handy for development.
 
@@ -84,6 +87,14 @@ wipes your progress after a confirmation.
 **Settings** (pause menu, saved in the browser): time of day, weather, volume, invert up/down, camera
 distance and graphics quality. If the game runs slowly at a higher setting, it suggests a lower one.
 
+**Flying together.** Press *Fly together* (top right, or in the pause menu) to get an invite link and send it
+to friends. They pick a bird and start just behind your right wing, with your time of day and weather. Everyone
+sees the others as their own species with a name tag, and on the compass. Changing the time or the weather
+changes it for the whole room. *Race your friends* on the challenge board (`C`) gives everyone in the room the
+same rings, with a 15-second countdown to gather at the first one, and announces who finished in which place.
+The room code stays in the address bar, so reloading the page rejoins. You can change your name in the
+invite panel.
+
 **Sound** is generated in the browser (no audio files): wind that rises with speed, wing beats, city hum,
 waves near water, birdsong near trees by day, crickets at night, and effects for everything you do.
 
@@ -149,10 +160,47 @@ real coordinates, so they stay where you built them.
    food placed per tile from the map (`worldItems.js`), landmark discovery with compass and beams, nest
    building from tree branches, races planned along the street and canal network, the hawk, rewards,
    hunger, levels and saving.
-8. **Sound** (`sound.js`): Web Audio synthesis, with ambience driven by a coarse land-cover grid each tile
+8. **Multiplayer** (`server/relay.js`, `net.js`, `peers.js`, `multiplayer.js`): a small Node relay (using the
+   `ws` package) groups players into rooms by invite code and forwards their messages. It stores only each
+   player's latest state and the room's time and weather, which a newcomer needs. The map is never sent:
+   everyone builds the same place from the same coordinates, so positions can be shared as they are. Each
+   bird sends its position, heading, speed, state and a few flags ten times a second. Other birds are shown
+   150 ms in the past, blended between received states, which keeps their turns smooth.
+9. **Sound** (`sound.js`): Web Audio synthesis, with ambience driven by a coarse land-cover grid each tile
    reads back from its painted ground.
 
 In development (`npm run dev`) the game is exposed as `window.__game` for poking at it from the console.
+
+## Hosting the relay
+
+For a public site, run the relay next to the static build and let the web server pass `/relay` to it:
+
+```bash
+npm run build          # static files in dist/
+PORT=8787 npm run relay
+```
+
+Apache (with `mod_proxy` and `mod_proxy_wstunnel`):
+
+```apache
+ProxyPass        /relay ws://localhost:8787/relay
+ProxyPassReverse /relay ws://localhost:8787/relay
+```
+
+nginx:
+
+```nginx
+location /relay {
+    proxy_pass http://localhost:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+The page connects to `wss://<its own host>/relay` (or `ws://` over plain HTTP), so HTTPS works without
+mixed-content problems. To use a relay somewhere else, build with `VITE_RELAY_URL=wss://example.org/relay`.
+The relay has no accounts: anyone with an invite link can join that room (up to 16 birds).
 
 ## Data and attribution
 
@@ -176,4 +224,5 @@ a commercial or self-hosted tile provider.
 - [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
       landmark discovery, XP and levels, challenge mode, touchdown landings, nest building and a home.
 - [x] **Phase 4b.** Hawk, optional challenges (street races, landmark sprints, feeding the chicks), sound.
+- [x] **Multiplayer.** Invite links, other birds with name tags, shared time and weather, races between friends.
 - [x] **Phase 5: polish.** Touch and gamepad controls, journal, badges and records, settings, phone layout.

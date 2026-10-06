@@ -32,11 +32,19 @@ export class Challenges {
   }
 
   /** What can be started right now, with a reason when something isn't available. */
-  offers(bird) {
+  offers(bird, friends = 0) {
     const route = this.planRace(bird);
     const sprint = this.pickSprint(bird);
     const home = this.nests.homeNear(bird.position, FEED_RANGE);
+    const together = friends > 0 ? [{
+      type: 'race-friends', title: 'Race your friends', available: !!route,
+      text: route
+        ? `Everyone in the room races the same ${Math.min(route.rings.length, 40)} rings, starting in 15 seconds. The first ring is near you.`
+        : 'No streets or canals nearby to race along. Try it over town.',
+      plan: route,
+    }] : [];
     return [
+      ...together,
       {
         type: 'race', title: 'Street race', available: !!route,
         text: route
@@ -75,6 +83,24 @@ export class Challenges {
     this.sound.play('warning');
   }
 
+  /**
+   * A race shared with the room: the same rings for everyone and a countdown before the clock starts.
+   * @param from  name of the friend who started it, or null when it's ours
+   */
+  startShared({ rid, rings, time, countdown }, bird, from) {
+    this.cancel(false);
+    this.active = {
+      type: 'race', title: from ? `${from}'s race` : 'Race with friends', elapsed: 0,
+      rings, next: 0, timeLimit: time, countdown, shared: rid,
+    };
+    this.buildRings();
+    bird.carryingFood = false;
+    this.notify(from
+      ? `${from} started a race! Get to the first ring (on your compass): it starts in ${Math.round(countdown)} seconds.`
+      : `Race on! It starts in ${Math.round(countdown)} seconds: get to the first ring.`, 'discovery');
+    this.sound.play('warning');
+  }
+
   cancel(say = true) {
     if (!this.active) return;
     if (say) this.notify(`${this.active.title} abandoned`, 'hint');
@@ -90,6 +116,17 @@ export class Challenges {
   update(dt, bird, events) {
     const a = this.active;
     if (!a) return;
+    if (a.countdown > 0) {
+      const before = Math.ceil(a.countdown);
+      a.countdown -= dt;
+      if (a.countdown <= 0) {
+        this.notify('Go!', 'level');
+        this.sound.play('ring');
+      } else if (Math.ceil(a.countdown) !== before && before <= 3) {
+        this.sound.play('warning');
+      }
+      return;
+    }
     a.elapsed += dt;
     const p = bird.position;
 
@@ -127,6 +164,7 @@ export class Challenges {
 
   succeed(xp) {
     this.progress?.recordChallenge(this.active.type, this.active.elapsed);
+    if (this.active.shared) this.onSharedFinish?.(this.active.shared, this.active.elapsed);
     this.notify(`${this.active.title} complete! +${xp} XP`, 'level');
     this.sound.play('success');
     this.reward(xp);
@@ -141,6 +179,7 @@ export class Challenges {
     const detail = a.type === 'race' ? `Ring ${a.next + 1} of ${a.rings.length}`
       : a.type === 'sprint' ? `Reach ${a.landmark.name}`
         : `Meals delivered ${a.delivered}/${FEED_GOAL}`;
+    if (a.countdown > 0) return { title: a.title, detail: `Starts in ${Math.ceil(a.countdown)} · get to ring 1`, timeLeft: a.timeLimit };
     return { title: a.title, detail, timeLeft: Math.max(0, a.timeLimit - a.elapsed) };
   }
 

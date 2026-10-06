@@ -4,10 +4,15 @@
   import { WEATHER } from '../game/weather.js';
   import TouchControls from './TouchControls.svelte';
   import Journal from './Journal.svelte';
+  import { newRoomCode, randomName } from '../game/net.js';
 
-  let { place, demo = false, species, mode, progress, onexit, onalbum } = $props();
+  let { place, demo = false, species, mode, progress, room = null, onroom = () => {}, onexit, onalbum } = $props();
 
   let canvas;
+  let tagLayer;
+  let inviteOpen = $state(false);
+  let copied = $state(false);
+  let playerName = $state(loadSetting('name', '') || randomName(species));
   let game;
   let hud = $state({ altitude: 0, speed: 0, bump: false, tiles: null, time: null, stamina: 1, hunger: null, compass: [] });
   let quality = $state(loadSetting('quality', 'high'));
@@ -43,10 +48,13 @@
       species,
       mode,
       progress,
+      room: room ? { code: room, name: playerName, tagLayer } : null,
       onStatus: (next) => (status = next),
       onNotify: notify,
       onHud(next) {
         hud = next;
+        // Someone else in the room may have changed the weather.
+        if (next.weatherMode && next.weatherMode !== weather) weather = next.weatherMode;
         if (next.bump) {
           bumpFlash = true;
           clearTimeout(bumpTimer);
@@ -59,6 +67,10 @@
     game.cameraDistance = cameraDistance;
     game.input.onButton = (button) => {
       if (status.state !== 'ready' || journalOpen) return;
+      if (inviteOpen) {
+        if (button === 'pause') closeInvite();
+        return;
+      }
       if (button === 'pause') {
         if (board) closeBoard();
         else setPaused(!paused);
@@ -102,6 +114,64 @@
       // Storage unavailable (private mode): the setting just won't be remembered.
     }
   }
+
+  // ---- Flying together ----
+
+  const roomLink = (code) => {
+    const url = new URL(location.origin + location.pathname);
+    url.searchParams.set('room', code);
+    url.searchParams.set('lat', place.lat.toFixed(5));
+    url.searchParams.set('lon', place.lon.toFixed(5));
+    url.searchParams.set('place', place.name);
+    if (demo) url.searchParams.set('demo', '1');
+    return url.href;
+  };
+
+  /** Opens the invite panel, creating a room the first time. */
+  function openInvite() {
+    if (!game.multiplayer) {
+      const code = newRoomCode();
+      game.joinRoom({ code, name: playerName, tagLayer });
+      onroom(code);
+    }
+    saveSetting('name', playerName);
+    copied = false;
+    inviteOpen = true;
+    paused = false;
+    game.setPaused(true);
+  }
+
+  function closeInvite() {
+    inviteOpen = false;
+    game.setPaused(false);
+  }
+
+  function leaveRoom() {
+    game.leaveRoom();
+    onroom(null);
+    closeInvite();
+    notify('You left the room: flying alone again', 'hint');
+  }
+
+  async function copyLink(link) {
+    try {
+      await navigator.clipboard.writeText(link);
+      copied = true;
+    } catch {
+      document.querySelector('.invite-link')?.select();
+    }
+  }
+
+  function rename(value) {
+    const name = value.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 20);
+    if (!name) return;
+    playerName = name;
+    saveSetting('name', name);
+    game.multiplayer?.rename(name);
+  }
+
+  const presence = (r) => r.status !== 'online' ? (r.status === 'connecting' ? 'connecting…' : 'offline')
+    : r.others.length ? `${r.others.length + 1} birds` : 'waiting for friends';
 
   function setPaused(value) {
     paused = value;
@@ -230,6 +300,10 @@
 
   function onkeydown(e) {
     if (status.state !== 'ready' || journalOpen) return;
+    if (inviteOpen) {
+      if (e.key === 'Escape') closeInvite();
+      return;
+    }
     if (e.key === 'j' || e.key === 'J') {
       openJournal();
       return;
@@ -260,6 +334,7 @@
 
 <div class="game" class:touch={touch && status.state === 'ready'}>
   <canvas bind:this={canvas}></canvas>
+  <div class="tags" bind:this={tagLayer} aria-hidden="true"></div>
 
   <div class="hud top">
     <div class="place">{place.name}</div>
@@ -286,7 +361,7 @@
         {/if}
       {/each}
       {#each hud.compass as mark, i (mark.id)}
-        <span class="mark" class:home={mark.home} class:target={mark.target} class:nearest={i === 0 || mark.home || mark.target} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
+        <span class="mark" class:home={mark.home} class:target={mark.target} class:friend={mark.friend} class:nearest={i === 0 || mark.home || mark.target || mark.friend} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
           <i></i>
           <small>{mark.name}<br />{formatDistance(mark.distance)}</small>
         </span>
@@ -436,14 +511,52 @@
       </div>
       <button onclick={() => setPaused(false)}>Resume</button>
       <button class="secondary" onclick={openJournal}>Journal</button>
+      <button class="secondary" onclick={openInvite}>Fly together</button>
       <button class="secondary" onclick={onalbum}>Change bird</button>
       <button class="secondary" onclick={onexit}>Choose another place</button>
     </div>
   {/if}
 
-  <button class="exit" onclick={onexit} title="Choose another place">New place</button>
+  {#if inviteOpen}
+    {@const r = hud.room ?? game.multiplayer?.status}
+    {@const link = r ? roomLink(r.room) : ''}
+    <div class="pause invite">
+      <h2>Fly together</h2>
+      <p>Send this link to your friends. They pick a bird and start right beside you, with the same time and weather.</p>
+      <div class="link-row">
+        <input class="invite-link" readonly value={link} onfocus={(e) => e.currentTarget.select()} />
+        <button onclick={() => copyLink(link)}>{copied ? 'Copied' : 'Copy'}</button>
+        {#if navigator.share}
+          <button class="secondary" onclick={() => navigator.share({ title: `Fly over ${place.name} in Birb`, url: link }).catch(() => {})}>Share</button>
+        {/if}
+      </div>
+      <label class="name">
+        <span>Your name</span>
+        <input value={playerName} maxlength="20" onchange={(e) => rename(e.currentTarget.value)} />
+      </label>
+      {#if r}
+        <p class="presence">
+          {#if r.status === 'online'}
+            {r.others.length ? `Flying with ${r.others.join(', ')}` : 'Connected. Nobody else here yet.'}
+          {:else if r.status === 'connecting'}
+            Connecting to the relay…
+          {:else}
+            Can't reach the relay. Retrying…
+          {/if}
+        </p>
+      {/if}
+      <p class="muted-help">Friends show up as birds with name tags and on your compass. {touch ? 'Tap Challenges' : 'Press C'} for a race against everyone.</p>
+      <button onclick={closeInvite}>Back to flying</button>
+      <button class="secondary" onclick={leaveRoom}>Leave and fly alone</button>
+    </div>
+  {/if}
 
-  {#if touch && status.state === 'ready' && !paused && !board && !journalOpen}
+  <div class="corner">
+    <button class="together" onclick={openInvite} title="Invite friends to fly with you">{hud.room ? presence(hud.room) : 'Fly together'}</button>
+    <button class="exit" onclick={onexit} title="Choose another place">New place</button>
+  </div>
+
+  {#if touch && status.state === 'ready' && !paused && !board && !journalOpen && !inviteOpen}
     <TouchControls input={game.input} onpause={() => setPaused(true)} onchallenges={openBoard} />
   {/if}
 
@@ -479,6 +592,9 @@
         {#if touch && hud.tiles?.loading}<span class="dot" title="Map tiles still loading around you"></span>{/if}
         <span class="clock">{formatHour(hud.time)}</span>
         <!-- Blur after a click so Space (flap) and the arrow keys go back to flying. -->
+        {#if hud.room && touch}
+          <button class="chip" onclick={openInvite} title="Flying together">{presence(hud.room)}</button>
+        {/if}
         <button class="chip" onclick={(e) => { resetTime(); e.currentTarget.blur(); }} title="Back to the real time at this place">Now</button>
         <button class="chip" onclick={(e) => { cycleWeather(); e.currentTarget.blur(); }} title="Change the weather">
           {weather === 'real' ? `${hud.weather ?? 'Clear'} · real` : hud.weather}
@@ -511,7 +627,7 @@
 
   .hud,
   .help,
-  .exit,
+  .corner,
   .attribution {
     position: absolute;
     color: #fff;
@@ -539,9 +655,17 @@
     font-size: 1.2rem;
   }
 
-  .exit {
+  .corner {
     top: 16px;
     right: 16px;
+    display: flex;
+    gap: 8px;
+  }
+
+  .exit,
+  .together {
+    color: #fff;
+    text-shadow: 0 1px 4px #0008;
     padding: 0.45rem 0.9rem;
     border: 1px solid #ffffff88;
     border-radius: 999px;
@@ -659,6 +783,11 @@
     box-shadow: 0 0 10px #ff8a3d;
     width: 12px;
     height: 12px;
+  }
+
+  .mark.friend i {
+    background: #6fc3ff;
+    box-shadow: 0 0 8px #6fc3ff;
   }
 
   .mark.edge i {
@@ -780,6 +909,10 @@
     border-left: 3px solid #ff6b5b;
   }
 
+  .note.friend {
+    border-left: 3px solid #6fc3ff;
+  }
+
   .note.food {
     border-left: 3px solid #8fd16a;
   }
@@ -848,7 +981,7 @@
     display: grid;
     justify-items: center;
     gap: 2px;
-    width: 170px;
+    width: 200px;
     color: #fff;
     text-shadow: 0 1px 3px #000a;
   }
@@ -897,6 +1030,7 @@
   }
 
   .chip {
+    white-space: nowrap;
     padding: 0.15rem 0.55rem;
     border: 1px solid #ffffff66;
     border-radius: 999px;
@@ -1154,7 +1288,7 @@
 
   /* Touch screens: Menu holds "Choose another place", the sky controls shrink to their chips at the
      top right, and the meters sit low between the joystick and the buttons. */
-  .touch .exit {
+  .touch .corner {
     display: none;
   }
 
@@ -1197,4 +1331,80 @@
     }
   }
 
+  .tags {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .tags :global(.peer-tag) {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: grid;
+    justify-items: center;
+    padding: 0.15rem 0.5rem;
+    border-radius: 8px;
+    background: #0d1a2799;
+    color: #fff;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    will-change: transform;
+  }
+
+  .tags :global(.peer-tag b) {
+    color: #9fd8ff;
+  }
+
+  .tags :global(.peer-tag small:empty) {
+    display: none;
+  }
+
+  .pause.invite {
+    padding: 16px;
+  }
+
+  .invite p {
+    max-width: 440px;
+    margin: 0 0 0.8rem;
+  }
+
+  .link-row {
+    display: flex;
+    gap: 6px;
+    width: min(460px, calc(100vw - 32px));
+    margin-bottom: 0.8rem;
+  }
+
+  .link-row input,
+  .invite .name input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid #ffffff55;
+    border-radius: 8px;
+    background: #0d1a2799;
+    color: #fff;
+    font: inherit;
+    font-size: 0.85rem;
+  }
+
+  .link-row button {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .invite .name {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: min(460px, calc(100vw - 32px));
+    margin-bottom: 0.8rem;
+  }
+
+  .invite .presence {
+    font-weight: 600;
+  }
 </style>

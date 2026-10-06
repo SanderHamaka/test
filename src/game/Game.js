@@ -18,6 +18,7 @@ import { Rain } from './rain.js';
 import { WEATHER, WeatherState, fetchRealWeather } from './weather.js';
 import { BADGES, BADGE_XP } from './badges.js';
 import { Input } from './Input.js';
+import { Multiplayer } from './multiplayer.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
 import { atSolarHours, solarHours } from './sun.js';
@@ -45,9 +46,10 @@ export class Game {
    * @param onHud     called ~10x per second with flight, progress and compass data
    * @param onStatus  called with { state: 'loading' | 'ready' | 'error', message }
    * @param onNotify  called with (text, kind) for messages to the player
+   * @param room      { code, name, tagLayer } to fly together with the others in that room (see joinRoom)
    */
   constructor(canvas, place, {
-    demo = false, quality = 'high', weather = 'real', species, mode = 'relaxed', progress,
+    demo = false, quality = 'high', weather = 'real', species, mode = 'relaxed', progress, room = null,
     onHud = () => {}, onStatus = () => {}, onNotify = () => {},
   } = {}) {
     this.canvas = canvas;
@@ -76,7 +78,9 @@ export class Game {
     this.shake = 0;
     this.hudTimer = 0;
     this.hudFlags = {};
-    this.date = new Date(); // the real time at the place, until the player changes it
+    this.timeOffset = 0; // ms between the game's clock and the real time at the place (0 = now)
+    this.date = new Date();
+    this.multiplayer = null;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -124,6 +128,7 @@ export class Game {
     this.resizeObserver.observe(canvas);
     this.resize();
 
+    if (room) this.joinRoom(room);
     this.timer = new THREE.Timer();
     this.renderer.setAnimationLoop((time) => this.frame(time));
     this.start(place, demo);
@@ -153,6 +158,26 @@ export class Game {
       tiles: this.tiles, nests: this.nests, discoveries: this.discoveries, species: this.bird.species,
       notify: this.onNotify, reward: (xp) => this.gameplay.reward(xp), sound: this.sound, progress: this.progress,
     });
+    this.challenges.onSharedFinish = (rid, seconds) => this.multiplayer?.finished(rid, seconds);
+
+    // Joining friends: start beside one of them (if the relay answers in time).
+    if (this.multiplayer && await this.multiplayer.waitForWelcome(4000) && !this.disposed) {
+      let beside = this.multiplayer.spawnBeside();
+      if (beside) {
+        await this.tiles.whenReady(beside.position);
+        if (this.disposed) return;
+        beside = this.multiplayer.spawnBeside() ?? beside; // they kept flying while the map loaded
+        this.spawnPoint = beside.position.clone();
+        const surface = this.tiles.surfaceAt(beside.position.x, beside.position.z);
+        this.bird.spawn(beside.position.x, Math.max(beside.position.y, surface + 15), beside.position.z, beside.yaw);
+        this.bird.model.visible = true;
+        this.placeCamera(true);
+        this.onNotify(`You joined ${beside.name}: they're just to your left.`, 'friend');
+        this.ready = true;
+        this.onStatus({ state: 'ready' });
+        return;
+      }
+    }
 
     // Start at your nest if you have one near this place, otherwise above the place itself.
     this.spawnPoint = new THREE.Vector3(0, 0, 60);
@@ -214,18 +239,46 @@ export class Game {
   }
 
   setSolarHour(hours) {
-    this.date = atSolarHours(this.date, this.place.lon, hours);
-    this.lighting.setTime(this.date);
+    this.setTimeOffset(atSolarHours(this.date, this.place.lon, hours).getTime() - Date.now());
   }
 
   nudgeTime(minutes) {
-    this.date = new Date(this.date.getTime() + minutes * 60000);
-    this.lighting.setTime(this.date);
+    this.setTimeOffset(this.timeOffset + minutes * 60000);
   }
 
   resetTime() {
-    this.date = new Date();
+    this.setTimeOffset(0);
+  }
+
+  setTimeOffset(offset, share = true) {
+    this.timeOffset = offset;
+    this.date = new Date(Date.now() + offset);
     this.lighting.setTime(this.date);
+    if (share) this.multiplayer?.shareEnv();
+  }
+
+  // ---- Flying together ----
+
+  /** Time and weather as shared with the room. */
+  envState() {
+    return { offset: Math.round(this.timeOffset), wx: this.weatherMode };
+  }
+
+  /** Time and weather chosen by someone else in the room. */
+  applyEnv({ offset, wx }) {
+    if (Number.isFinite(offset)) this.setTimeOffset(offset, false);
+    if (typeof wx === 'string' && wx !== this.weatherMode && (wx === 'real' || WEATHER[wx])) this.setWeatherMode(wx, false);
+  }
+
+  /** Connects to a room on the relay: { code, name, tagLayer }. */
+  joinRoom({ code, name, tagLayer }) {
+    this.leaveRoom();
+    this.multiplayer = new Multiplayer(this, { room: code, name, tagLayer });
+  }
+
+  leaveRoom() {
+    this.multiplayer?.dispose();
+    this.multiplayer = null;
   }
 
   // ---- Graphics quality ----
@@ -286,13 +339,15 @@ export class Game {
     this.far?.update(focus);
 
     if (this.ready && !this.paused) {
-      this.date = new Date(this.date.getTime() + dt * 1000);
+      this.date = new Date(Date.now() + this.timeOffset);
       this.updateWeather(dt);
       this.lighting.setTime(this.date);
       this.simulate(dt, this.input.state);
       this.placeCamera(false, dt);
       this.reportHud(dt);
     }
+    // Other birds keep flying (and we keep telling them where we are) while the game is paused.
+    if (this.ready) this.multiplayer?.update(dt, this.camera);
     this.lighting.follow(this.bird.position, this.camera.position);
     this.updateAtmosphere(this.paused ? 0 : dt);
     if (this.ready) this.updateSound(this.paused ? 0 : dt);
@@ -313,8 +368,9 @@ export class Game {
   // ---- Weather ----
 
   /** 'real' fetches the current weather at the place; otherwise a preset name from WEATHER. */
-  setWeatherMode(mode) {
+  setWeatherMode(mode, share = true) {
     this.weatherMode = mode;
+    if (share) this.multiplayer?.shareEnv();
     if (mode !== 'real') {
       this.weather.set(WEATHER[mode] ? mode : 'clear');
       return;
@@ -495,10 +551,15 @@ export class Game {
   // ---- Challenges (started from the challenge board) ----
 
   challengeOffers() {
-    return this.challenges.offers(this.bird);
+    const friends = this.multiplayer?.net.online ? this.multiplayer.peers.entries.size : 0;
+    return this.challenges.offers(this.bird, friends);
   }
 
   startChallenge(offer) {
+    if (offer.type === 'race-friends') {
+      if (offer.available) this.multiplayer?.startRace(offer.plan);
+      return;
+    }
     this.challenges.start(offer, this.bird);
   }
 
@@ -594,7 +655,8 @@ export class Game {
       canLand: this.bird.state === 'flying' && p.y - this.tiles.surfaceAt(p.x, p.z) < LAND_RANGE,
       level: this.progress.level,
       levelProgress: this.progress.levelProgress,
-      compass: [this.targetMark(), this.homeMark(), ...this.discoveries.compass].filter(Boolean),
+      compass: [this.targetMark(), this.homeMark(), ...(this.multiplayer?.compass() ?? []), ...this.discoveries.compass].filter(Boolean),
+      room: this.multiplayer?.status ?? null,
       challenge: this.challenges.status,
       hawk: this.hawk?.alarm ?? null,
       carryingFood: this.bird.carryingFood,
@@ -610,6 +672,7 @@ export class Game {
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.input.dispose();
+    this.leaveRoom();
     this.tiles?.dispose();
     this.food.dispose();
     this.discoveries.dispose();

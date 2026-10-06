@@ -4,7 +4,7 @@
   import { renderPortraits } from '../game/portraits.js';
   import Journal from './Journal.svelte';
 
-  let { place, progress, onfly, onback } = $props();
+  let { place, progress, room = null, onfly, onback } = $props();
 
   let portraits = $state({});
   let selected = $state(SPECIES.find((s) => s.id === progress.lastSpecies && progress.isUnlocked(s))?.id ?? 'gull');
@@ -46,6 +46,9 @@
   {#if journalOpen}<Journal {progress} onclose={() => (journalOpen = false)} />{/if}
 
   <h1><span class="brand">Birb</span> Choose your bird</h1>
+  {#if room}
+    <p class="invite">You're invited to fly over <b>{place.name}</b> with friends. Pick a bird and you'll start right beside them.</p>
+  {/if}
 
   <div class="cards">
     {#each SPECIES as species (species.id)}
@@ -154,6 +157,15 @@
     max-width: 1100px;
     font-size: clamp(1.8rem, 5vw, 2.6rem);
     letter-spacing: -0.02em;
+  }
+
+  .invite {
+    max-width: 1100px;
+    margin: -0.6rem auto 1.2rem;
+    padding: 0.6rem 0.9rem;
+    border-left: 3px solid #6fc3ff;
+    border-radius: 8px;
+    background: #ffffff1f;
   }
 
   h1 .brand {
