@@ -102,6 +102,45 @@
     saveSetting('weather', value);
   }
 
+  // Weather button: cycles through the real weather and every preset.
+  const WEATHER_CYCLE = ['real', ...Object.keys(WEATHER)];
+  function cycleWeather() {
+    setWeather(WEATHER_CYCLE[(WEATHER_CYCLE.indexOf(weather) + 1) % WEATHER_CYCLE.length]);
+  }
+
+  // Sun arc: a half circle where the left end is midnight, the top noon and the right end midnight again.
+  const ARC = { cx: 120, cy: 112, r: 96 };
+  const arcPoint = (h) => {
+    const th = (1 - h / 24) * Math.PI;
+    return { x: ARC.cx + ARC.r * Math.cos(th), y: ARC.cy - ARC.r * Math.sin(th) };
+  };
+  let dragging = false;
+  function hourFromPointer(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * 240, y = ((e.clientY - r.top) / r.height) * 130;
+    let th = Math.atan2(ARC.cy - y, x - ARC.cx);
+    if (th < 0) th = x < ARC.cx ? Math.PI : 0;
+    return (1 - Math.min(Math.PI, Math.max(0, th)) / Math.PI) * 23.99;
+  }
+  function arcDown(e) {
+    dragging = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setHour(hourFromPointer(e));
+    e.preventDefault();
+  }
+  function arcMove(e) {
+    if (dragging) setHour(hourFromPointer(e));
+  }
+  function arcKey(e) {
+    const steps = { ArrowLeft: -0.25, ArrowRight: 0.25, ArrowDown: -1, ArrowUp: 1 };
+    if (!(e.key in steps)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setHour((((hud.time ?? 12) + steps[e.key]) % 24 + 24) % 24);
+  }
+  // Accent: warm amber by day, cool moonlight blue at night.
+  const accent = (night) => `rgb(${Math.round(255 - 86 * night)} ${Math.round(179 + 20 * night)} ${Math.round(71 + 184 * night)})`;
+
   function setVolume(value) {
     volume = value;
     game.sound.setVolume(value);
@@ -344,6 +383,41 @@
   {/if}
 
   <button class="exit" onclick={onexit} title="Choose another place">New place</button>
+
+  {#if status.state === 'ready' && hud.time != null}
+    {@const sun = arcPoint(hud.time)}
+    <div class="sky-controls" style="--accent: {accent(hud.night ?? 0)}">
+      <svg
+        viewBox="0 0 240 130"
+        class="arc"
+        role="slider"
+        tabindex="0"
+        aria-label="Time of day (drag the sun)"
+        aria-valuemin="0"
+        aria-valuemax="24"
+        aria-valuenow={hud.time.toFixed(2)}
+        aria-valuetext={formatHour(hud.time)}
+        onpointerdown={arcDown}
+        onpointermove={arcMove}
+        onpointerup={(e) => { dragging = false; e.currentTarget.blur(); }}
+        onpointercancel={() => (dragging = false)}
+        onkeydown={arcKey}
+      >
+        <path d="M 24 112 A 96 96 0 0 1 216 112" class="track" />
+        <line x1="10" y1="112" x2="230" y2="112" class="horizon" />
+        <circle cx={sun.x} cy={sun.y} r="16" class="glow" />
+        <circle cx={sun.x} cy={sun.y} r="8" class="sun" />
+      </svg>
+      <div class="sky-row">
+        <span class="clock">{formatHour(hud.time)}</span>
+        <!-- Blur after a click so Space (flap) and the arrow keys go back to flying. -->
+        <button class="chip" onclick={(e) => { resetTime(); e.currentTarget.blur(); }} title="Back to the real time at this place">Now</button>
+        <button class="chip" onclick={(e) => { cycleWeather(); e.currentTarget.blur(); }} title="Change the weather">
+          {weather === 'real' ? `${hud.weather ?? 'Clear'} · real` : hud.weather}
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <div class="attribution">
     © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>
@@ -697,6 +771,77 @@
 
   .meter.low i {
     background: #ff6b5b;
+  }
+
+  .sky-controls {
+    position: absolute;
+    right: 16px;
+    bottom: 34px;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    width: 170px;
+    color: #fff;
+    text-shadow: 0 1px 3px #000a;
+  }
+
+  .arc {
+    width: 100%;
+    cursor: grab;
+    touch-action: none;
+    outline: none;
+  }
+
+  .arc:focus-visible .track {
+    stroke: var(--accent);
+  }
+
+  .arc .track {
+    fill: none;
+    stroke: #ffffff66;
+    stroke-width: 2;
+    stroke-dasharray: 3 5;
+  }
+
+  .arc .horizon {
+    stroke: #ffffff40;
+    stroke-width: 1;
+  }
+
+  .arc .sun {
+    fill: var(--accent);
+  }
+
+  .arc .glow {
+    fill: var(--accent);
+    opacity: 0.3;
+  }
+
+  .sky-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sky-row .clock {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip {
+    padding: 0.15rem 0.55rem;
+    border: 1px solid #ffffff66;
+    border-radius: 999px;
+    background: #0003;
+    color: #fff;
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+  }
+
+  .chip:hover {
+    border-color: var(--accent);
   }
 
   .tiles {

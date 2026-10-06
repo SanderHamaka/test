@@ -330,9 +330,22 @@ export class Game {
     const refresh = changing && this.weatherRefresh <= 0;
     if (refresh) this.weatherRefresh = 2;
     this.lighting.setWeather(this.weather.current, refresh);
-    this.lighting.tick(dt, this.weather.wind.speed);
     const wind = this.weather.windVector();
+    this.lighting.tick(dt, wind);
     this.bird.wind = wind;
+    this.updateLightning(dt);
+  }
+
+  /** In a storm: a flash every few seconds, with thunder after a delay that depends on the distance. */
+  updateLightning(dt) {
+    if (this.weather.preset !== 'storm' || this.weather.current.rain < 0.85) return;
+    this.nextBolt = (this.nextBolt ?? 6) - dt;
+    if (this.nextBolt > 0) return;
+    this.nextBolt = 5 + Math.random() * 11;
+    this.lighting.flash(0.6 + Math.random() * 0.4);
+    // A second, weaker flicker right after the first.
+    setTimeout(() => this.lighting.flash(0.4 + Math.random() * 0.3), 120 + Math.random() * 120);
+    setTimeout(() => this.sound.play('thunder'), 400 + Math.random() * 2500);
   }
 
   /** Fog (weather, height fog, inside clouds), clouds, rain and street lights; runs every frame. */
@@ -342,9 +355,10 @@ export class Game {
     const lerp = THREE.MathUtils.lerp;
 
     if (this.ready) {
-      const key = this.lighting.key, sky = this.lighting.hemisphere;
-      const lit = key.color.clone().multiplyScalar(key.intensity * 0.6).add(sky.color.clone().multiplyScalar(sky.intensity * 1.4));
-      const shade = sky.color.clone().multiplyScalar(sky.intensity * 1.1 + 0.02).lerp(new THREE.Color(0.3, 0.32, 0.36), w.overcast * 0.4 * (1 - night));
+      // Cloud banks take their colours from the sky palette: sunlit tops, horizon-tinted undersides.
+      const p = this.lighting.palette;
+      const lit = p.sun.clone().multiplyScalar(p.sunI * 0.45).add(p.horizon.clone().multiplyScalar(0.6));
+      const shade = p.horizon.clone().lerp(p.zenith, 0.35).multiplyScalar(0.75);
       this.clouds.update(dt, this.bird.position, w.cloud, { lit, shade });
     }
 
@@ -361,6 +375,8 @@ export class Game {
 
     this.rain.update(dt, this.camera, w.rain, this.weather.windVector(), lerp(1, 0.25, night));
     this.tiles?.resources.setNight(night);
+    this.food.setNight(night);
+    this.discoveries.setNight(night);
   }
 
   updateSound(dt) {
@@ -529,6 +545,8 @@ export class Game {
       tiles: this.tiles.status,
       time: this.solarHour,
       weather: WEATHER[this.weather.preset]?.label,
+      weatherMode: this.weatherMode,
+      night: this.lighting.uniforms.night.value,
       stamina: this.bird.stamina / this.bird.maxStamina,
       hunger: this.gameplay.challenge ? this.gameplay.hunger / 100 : null,
       state: this.bird.state,

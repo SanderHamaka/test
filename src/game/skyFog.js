@@ -81,7 +81,7 @@ export class SkyFog {
 function sampleHorizon(renderer, sky) {
   const size = 4;
   const target = new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType });
-  const camera = new THREE.PerspectiveCamera(1, 1, 1, sky.scale.x);
+  const camera = new THREE.PerspectiveCamera(1, 1, 1, 20000);
   const scene = new THREE.Scene();
   const parent = sky.parent;
   scene.add(sky);

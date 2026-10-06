@@ -45,6 +45,11 @@ export class Discoveries {
     }
   }
 
+  /** Beams are additive; tone them down at night so they don't outshine the city. */
+  setNight(night) {
+    this.beams.material.opacity = 0.16 * (1 - 0.6 * night);
+  }
+
   /** @returns landmarks discovered this frame */
   update(dt, bird) {
     this.timer -= dt;

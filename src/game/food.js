@@ -34,8 +34,8 @@ export class FoodManager {
     sparkleGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CAPACITY * 3 * 2), 3));
     sparkleGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(CAPACITY * 3 * 2), 3));
     this.sparkles = new THREE.Points(sparkleGeometry, new THREE.PointsMaterial({
-      size: 5, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.85,
-      blending: THREE.AdditiveBlending, depthWrite: false,
+      size: 2.5, sizeAttenuation: true, vertexColors: true, transparent: true, opacity: 0.8,
+      blending: THREE.AdditiveBlending, depthWrite: false, map: sparkleTexture(),
     }));
     this.sparkles.frustumCulled = false;
     scene.add(this.sparkles);
@@ -111,7 +111,13 @@ export class FoodManager {
     return eaten;
   }
 
+  /** Sparkles are a daytime aid; at night they'd look like stray lights, so they dim. */
+  setNight(night) {
+    this.sparkles.material.opacity = 0.8 * (1 - 0.7 * night);
+  }
+
   dispose() {
+    this.sparkles.material.map.dispose();
     for (const mesh of this.meshes) {
       mesh.geometry.dispose();
       mesh.removeFromParent();
@@ -121,6 +127,24 @@ export class FoodManager {
     this.sparkles.material.dispose();
     this.sparkles.removeFromParent();
   }
+}
+
+/** A soft round dot with a little four-pointed glint. */
+function sparkleTexture() {
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.6)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(size / 2 - 0.5, 2, 1, size - 4);
+  ctx.fillRect(2, size / 2 - 0.5, size - 4, 1);
+  return new THREE.CanvasTexture(canvas);
 }
 
 /** Gives a geometry a uniform vertex colour, so differently coloured parts can be merged. */

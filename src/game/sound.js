@@ -146,6 +146,7 @@ export class Sound {
       fail: () => this.tones([[392, 0], [311, 0.2], [233, 0.4]], 'triangle', 0.4, 0.16),
       warning: () => this.tones([[880, 0], [660, 0.15], [880, 0.3]], 'square', 0.12, 0.06),
       hawk: () => this.screech(),
+      thunder: () => this.thunder(),
       hit: () => { this.burst(160, 1, 0.3, 0.5, 'lowpass'); this.burst(1800, 2, 0.15, 0.25, 'bandpass'); },
     }[name];
     recipe?.();
@@ -229,6 +230,25 @@ export class Sound {
       osc.start(start);
       osc.stop(start + 0.04);
     }
+  }
+
+  /** A long rolling rumble: brown noise through a slowly closing low-pass filter. */
+  thunder() {
+    const ctx = this.ctx, t = ctx.currentTime;
+    const source = ctx.createBufferSource();
+    source.buffer = this.brown;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(900, t);
+    filter.frequency.exponentialRampToValueAtTime(90, t + 3);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.9, t + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.9);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+    source.connect(filter).connect(gain).connect(this.master);
+    source.start(t, Math.random());
+    source.stop(t + 3.3);
   }
 
   /** A raptor's descending scream with a little vibrato. */

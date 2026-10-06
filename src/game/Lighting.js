@@ -1,20 +1,24 @@
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
 import { SkyFog } from './skyFog.js';
+import { SkyDome, createPalette, skyPalette } from './skyDome.js';
 import { sunPosition } from './sun.js';
 
-// The sky box follows the camera; its corners must stay inside the camera's far plane.
+// The sky dome follows the camera and must stay inside the camera's far plane (18 km).
 export const SKY_SIZE = 18000;
+const SKY_RADIUS = 8000;
 const SHADOW_EXTENT = 170;
 
-const DAY_SUN = new THREE.Color(0xfff0dd);
-const LOW_SUN = new THREE.Color(0xffa060);
-const MOON = new THREE.Color(0x9fb6ff);
+// Light strengths relative to the palette (calibrated for ACES tone mapping at the palette's exposure).
+const SUN_STRENGTH = 1.1;
+const AMBIENT_STRENGTH = 0.32;
+const ENVIRONMENT_STRENGTH = 1.0;
+
 const smoothstep = (a, b, x) => THREE.MathUtils.smoothstep(x, a, b);
 
 /**
- * Sky, sun, moon, sky reflections and horizon fog for a place and time. The key light is the sun by
- * day and the moon by night, and keeps one shadow map centred on the bird.
+ * Sky, sun, moon, sky reflections and horizon fog for a place and time. Colours come from the
+ * art-directed palette in skyDome.js, keyed by the real sun height; the key light is the sun by day
+ * and the moon by night, and keeps one shadow map centred on the bird.
  */
 export class Lighting {
   constructor(renderer, scene, { lat, lon, shadowMapSize = 2048 }) {
@@ -24,30 +28,25 @@ export class Lighting {
     this.lon = lon;
     this.uniforms = { night: { value: 0 }, wet: { value: 0 } };
     this.weather = { cloud: 0.12, overcast: 0, rain: 0, fog: 0 };
+    this.palette = createPalette();
+    this.sunDir = new THREE.Vector3(0, 1, 0);
+    this.moonDir = new THREE.Vector3(0, -1, 0);
     this.direction = new THREE.Vector3(0, 1, 0);
     this.applied = null;
 
-    this.sky = new Sky();
-    this.sky.scale.setScalar(SKY_SIZE);
-    const u = this.sky.material.uniforms;
-    u.turbidity.value = 4;
-    u.rayleigh.value = 1.4;
-    u.mieCoefficient.value = 0.0025;
-    u.mieDirectionalG.value = 0.8;
+    this.dome = new SkyDome(SKY_RADIUS);
+    this.sky = this.dome.mesh;
     scene.add(this.sky);
 
-    // A copy of the sky in its own scene, rendered into the environment map for reflections.
+    // The same dome (shared uniforms) in its own scene, rendered into the environment map for reflections.
     this.pmrem = new THREE.PMREMGenerator(renderer);
     this.envScene = new THREE.Scene();
-    this.envSky = new Sky();
-    this.envSky.scale.setScalar(SKY_SIZE);
-    this.envSky.material.uniforms = THREE.UniformsUtils.clone(u);
-    this.envScene.add(this.envSky);
+    this.envScene.add(this.dome.clone());
 
     this.hemisphere = new THREE.HemisphereLight(0xcfe0f5, 0x6b6450, 0.3);
     scene.add(this.hemisphere);
 
-    this.key = new THREE.DirectionalLight(0xffffff, 3.4);
+    this.key = new THREE.DirectionalLight(0xffffff, 3);
     this.key.castShadow = true;
     this.setShadowMapSize(shadowMapSize);
     Object.assign(this.key.shadow.camera, {
@@ -56,9 +55,6 @@ export class Lighting {
     this.key.shadow.bias = -0.0004;
     this.key.shadow.normalBias = 0.6;
     scene.add(this.key, this.key.target);
-
-    this.stars = createStars();
-    scene.add(this.stars);
 
     scene.fog = new THREE.Fog(0xffffff, 450, 1400); // colour comes from SkyFog
     this.skyFog = null;
@@ -77,20 +73,18 @@ export class Lighting {
   }
 
   /**
-   * Applies weather (see weather.js) to the sky and light. Call setTime afterwards; pass refresh to
-   * re-render reflections and the horizon fog colour even if the sun hasn't moved.
+   * Applies weather (see weather.js). Call setTime afterwards; pass refresh to re-render reflections and
+   * the horizon fog colour even if the sun hasn't moved.
    */
   setWeather(w, refresh) {
     this.weather = { ...w };
-    for (const sky of [this.sky, this.envSky]) {
-      const u = sky.material.uniforms;
-      u.cloudCoverage.value = w.cloud;
-      u.cloudDensity.value = 0.4 + 0.5 * w.overcast;
-      u.turbidity.value = 4 + 7 * w.overcast + 4 * w.fog;
-      u.rayleigh.value = 1.4 - 0.9 * w.overcast;
-    }
     this.uniforms.wet.value = w.rain;
     if (refresh) this.applied = null;
+  }
+
+  /** A flash of lightning, 0..1; fades on its own in tick(). */
+  flash(strength) {
+    this.dome.uniforms.uFlash.value = Math.max(this.dome.uniforms.uFlash.value, strength);
   }
 
   /** Updates everything for a moment in time. Expensive parts only re-run when the sun has moved. */
@@ -98,42 +92,42 @@ export class Lighting {
     const sun = sunPosition(date, this.lat, this.lon);
     const el = THREE.MathUtils.degToRad(sun.elevation);
     const az = THREE.MathUtils.degToRad(sun.azimuth);
-    const sunDir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
-    this.sky.material.uniforms.sunPosition.value.copy(sunDir);
-
-    const day = smoothstep(-0.04, 0.12, sunDir.y); // 0 at night, 1 by day
-    const night = 1 - smoothstep(-0.14, 0.04, sunDir.y);
-    this.uniforms.night.value = night;
-    this.stars.material.opacity = night * 0.9;
-    this.stars.visible = night > 0.02;
+    const sunDir = this.sunDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
     this.sunElevation = sun.elevation;
 
-    // Key light: the sun while it's up, then the moon (opposite side of the sky, fixed height).
-    if (sunDir.y > -0.03) {
-      this.direction.copy(sunDir).setY(Math.max(sunDir.y, 0.02)).normalize();
-      this.key.color.copy(LOW_SUN).lerp(DAY_SUN, smoothstep(0.02, 0.35, sunDir.y));
-      this.key.intensity = 3.4 * day * (1 - 0.78 * this.weather.overcast);
-    } else {
-      this.direction.set(-sunDir.x, 0, -sunDir.z).normalize().multiplyScalar(0.8).setY(0.6).normalize();
-      this.key.color.copy(MOON);
-      this.key.intensity = 0.55 * night * (1 - 0.7 * this.weather.overcast);
-    }
-    // Overcast: soft, shadowless light from the whole sky.
-    this.key.shadow.intensity = 1 - 0.85 * this.weather.overcast;
+    // The moon: roughly opposite the sun, swung round 30° so it isn't always exactly behind you.
+    const m = this.moonDir.copy(sunDir).multiplyScalar(-1);
+    const c = Math.cos(0.52), s = Math.sin(0.52);
+    m.set(m.x * c - m.z * s, m.y, m.x * s + m.z * c).normalize();
 
-    this.hemisphere.intensity = THREE.MathUtils.lerp(0.06, 0.3 + 0.55 * this.weather.overcast, day);
-    this.hemisphere.color.set(day > 0.5 ? 0xcfe0f5 : 0x6d7fa8);
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(0.5, 0.9, night);
+    const w = this.weather;
+    const p = skyPalette(sunDir.y, w.overcast, this.palette);
+    const night = 1 - smoothstep(-0.14, 0.04, sunDir.y);
+    this.uniforms.night.value = night;
+    this.dome.apply(p, { sunDir, moonDir: m, night, cloud: w.cloud, overcast: w.overcast });
+
+    // Key light: the sun while it's up, then the moon (kept reasonably high so it lights the city).
+    if (sunDir.y > -0.03) this.direction.copy(sunDir).setY(Math.max(sunDir.y, 0.02)).normalize();
+    else this.direction.copy(m).setY(Math.max(m.y, 0.45)).normalize();
+    this.key.color.copy(p.sun);
+    this.key.intensity = p.sunI * SUN_STRENGTH; // the palette already dims the sun for overcast skies
+    // Overcast: soft, shadowless light from the whole sky.
+    this.key.shadow.intensity = 1 - 0.85 * w.overcast;
+
+    this.hemisphere.color.copy(p.zenith).lerp(p.horizon, 0.5);
+    this.hemisphere.groundColor.copy(p.ground).multiplyScalar(0.6);
+    // Lightning lights up everything for a moment.
+    this.hemisphere.intensity = p.amb * AMBIENT_STRENGTH * (1 + 1.8 * w.overcast) + this.dome.uniforms.uFlash.value * 2.5;
+    this.renderer.toneMappingExposure = p.exp;
 
     // Re-render reflections and the horizon fog when the sun has moved noticeably.
     const moved = !this.applied || this.applied.angleTo(sunDir) > THREE.MathUtils.degToRad(0.75);
     if (moved) {
       this.applied = sunDir.clone();
-      this.envSky.material.uniforms.sunPosition.value.copy(sunDir);
       const previous = this.envTarget;
       this.envTarget = this.pmrem.fromScene(this.envScene);
       this.scene.environment = this.envTarget.texture;
-      this.scene.environmentIntensity = THREE.MathUtils.lerp(0.25, 0.45, day);
+      this.scene.environmentIntensity = ENVIRONMENT_STRENGTH;
       previous?.dispose();
 
       this.sky.position.set(0, 0, 0);
@@ -142,15 +136,18 @@ export class Lighting {
     }
   }
 
-  /** Lets the sky's clouds drift; faster in stronger wind. */
-  tick(dt, windSpeed) {
-    this.sky.material.uniforms.time.value += dt * (0.4 + windSpeed / 8);
+  /** Twinkling stars, drifting clouds (with the wind) and fading lightning. */
+  tick(dt, wind) {
+    const u = this.dome.uniforms;
+    u.uTime.value += dt;
+    u.uCloudWind.value.x += (wind.x * 0.0006 + 0.0015) * dt;
+    u.uCloudWind.value.y += wind.z * 0.0006 * dt;
+    u.uFlash.value *= Math.exp(-dt * 9);
   }
 
   /** Keeps the shadow map centred on a point, snapped to whole texels so shadows don't shimmer. */
   follow(point, cameraPosition) {
     this.sky.position.copy(cameraPosition);
-    this.stars.position.copy(cameraPosition);
     const lz = this.direction;
     const lx = new THREE.Vector3(0, 1, 0).cross(lz).normalize();
     const ly = lz.clone().cross(lx);
@@ -166,38 +163,6 @@ export class Lighting {
     this.envTarget?.dispose();
     this.pmrem.dispose();
     this.skyFog?.dispose();
-    this.stars.geometry.dispose();
-    this.stars.material.dispose();
-    for (const sky of [this.sky, this.envSky]) {
-      sky.geometry.dispose();
-      sky.material.dispose();
-    }
+    this.dome.dispose();
   }
-}
-
-/** A fixed starfield on the upper half of a large sphere around the camera, faded in at night. */
-function createStars() {
-  const count = 2500;
-  const positions = new Float32Array(count * 3);
-  const colours = new Float32Array(count * 3);
-  let seed = 42;
-  const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-  for (let i = 0; i < count; i++) {
-    const y = 0.03 + random() * 0.97; // above the horizon only
-    const a = random() * Math.PI * 2;
-    const r = Math.sqrt(1 - y * y);
-    positions.set([Math.cos(a) * r * 8000, y * 8000, Math.sin(a) * r * 8000], i * 3);
-    const b = 0.4 + random() ** 3 * 0.6; // mostly faint, a few bright
-    colours.set([b, b, b * (0.9 + random() * 0.2)], i * 3);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
-  const material = new THREE.PointsMaterial({
-    size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0, fog: false, depthWrite: false,
-  });
-  const stars = new THREE.Points(geometry, material);
-  stars.frustumCulled = false;
-  stars.renderOrder = -1;
-  return stars;
 }

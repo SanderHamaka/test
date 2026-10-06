@@ -11,13 +11,15 @@ export const WEATHER = {
   clear: { label: 'Clear', cloud: 0.12, overcast: 0, rain: 0, fog: 0 },
   cloudy: { label: 'Cloudy', cloud: 0.5, overcast: 0.25, rain: 0, fog: 0 },
   overcast: { label: 'Overcast', cloud: 0.85, overcast: 0.7, rain: 0, fog: 0.15 },
-  rain: { label: 'Rain', cloud: 0.95, overcast: 0.85, rain: 1, fog: 0.35 },
+  rain: { label: 'Rain', cloud: 0.95, overcast: 0.8, rain: 0.75, fog: 0.3 },
+  storm: { label: 'Storm', cloud: 1, overcast: 0.95, rain: 1, fog: 0.45 },
   fog: { label: 'Fog', cloud: 0.6, overcast: 0.6, rain: 0, fog: 1 },
 };
 
 /** WMO weather codes (used by Open-Meteo) → preset. */
 function presetForCode(code, cloudCover) {
-  if (code >= 95 || (code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
+  if (code >= 95) return 'storm';
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
   if (code === 45 || code === 48) return 'fog';
   if (code >= 71 && code <= 86) return 'overcast'; // snow: no snowflakes yet, so at least make it grey
   if (code === 3 || cloudCover > 80) return 'overcast';

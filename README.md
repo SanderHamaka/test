@@ -28,7 +28,7 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | Mouse wheel | Camera distance |
 | `C` | Challenge board: start or abandon a challenge |
 | `M` | Sound on/off (volume is in the pause menu) |
-| `[` `]` | Time of day −/+ 30 minutes |
+| `[` `]` | Time of day −/+ 30 minutes (or drag the sun along the arc, bottom right) |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
 
 You also land by simply coming down onto a roof or the ground nose-first (or slowly), or by clipping the
@@ -59,6 +59,13 @@ discover them. XP from food and discoveries raises your level. Progress is saved
 **The hawk** (challenge mode) turns up every few minutes, circles high above you and dives when you're
 exposed in open sky. Get low between buildings, into a tree, or land, and it gives up; if it hits you,
 you lose stamina and food and drop whatever you were carrying.
+
+**Sky and weather.** The sun stands where it really is at that place and time; drag it along the arc at
+the bottom right to choose another time, or press *Now* to go back. The weather starts as the real current
+weather there (from [Open-Meteo](https://open-meteo.com)); the weather button cycles through clear, cloudy,
+overcast, rain, storm and fog. Wind drifts the clouds and the rain and gently carries you. Cloud banks float
+at a few hundred metres and you can fly into them. At night the street lights come on: mapped lamps from
+OSM where there are any, otherwise lamps along the roads.
 
 **Sound** is generated in the browser (no audio files): wind that rises with speed, wing beats, city hum,
 waves near water, birdsong near trees by day, crickets at night, and effects for everything you do.
@@ -103,13 +110,18 @@ real coordinates, so they stay where you built them.
    - `groundPainter.js` paints the ground into a 1024 × 1024 texture on an OffscreenCanvas: land use, water,
      roads with sidewalks and centre lines, red cycle paths, railways, and soft contact shadows around
      buildings. Painting instead of layering flat meshes drapes perfectly over hills and never z-fights.
-4. **Rendering** (`src/game/Game.js`, `Lighting.js`, `Tile.js`): Three.js with a physical sky whose sun follows the
-   real time at the place (`sun.js`, NOAA formulas), sky-based image lighting, moonlight and stars at night,
+4. **Rendering** (`src/game/Game.js`, `Lighting.js`, `skyDome.js`, `Tile.js`): Three.js with an art-directed sky:
+   colour keyframes by sun height (gradient, sun glow, moon, twinkling stars, Milky Way, fbm clouds) with the
+   sun at its real position (`sun.js`, NOAA formulas). Light, ambient and exposure come from the same
+   palette; the sky is also rendered into the environment map for reflections,
    shadows that follow the bird, and instanced trees. Windows are procedural with three styles per building,
    and at night a random share of them is lit. Post-processing (GTAO ambient occlusion, bloom at night) depends
    on the graphics setting: Low, Medium or High. The terrain shader recognises the
    painted water colour and turns it into glossy, rippling water that reflects the sky. `skyFog.js` fades
-   the distance into the sky's horizon colour in every direction, which hides the edge of the loaded tiles.
+   the distance into the sky's horizon colour in every direction, with height fog: low ground fades out at
+   the edge of the loaded tiles while hills and mountains (`farTerrain.js`, low-detail zoom-12 terrain out to
+   about 15 km) rise out of the haze. Weather (`weather.js`), rain (`rain.js`, GPU-animated streaks), cloud
+   banks (`clouds.js`) and street lamps with light pools are layered on top.
 5. **Flight** (`src/game/Bird.js`, `Colliders.js`): an arcade flight model (banking turns, gravity along
    the flight path, flapping, diving) tuned per species, with stamina, landing and perching. It follows
    the terrain, with collisions against building footprints across tile borders. You bounce off walls
@@ -141,7 +153,9 @@ a commercial or self-hosted tile provider.
       with glossy water, bridges, tile-relative geometry for range.
 - [x] **Phase 3: visuals.** Block downloads, sea and coastlines, roof shapes, measured heights in the
       Netherlands, window styles, ambient occlusion and bloom, day/night cycle with lit windows and stars.
-- [ ] **Later visuals.** Distant low-detail terrain, street lights, weather and clouds, WebGPU renderer.
+- [x] **Later visuals.** Art-directed day/night sky, real weather (clouds, overcast, rain, storm, fog,
+      wind), cloud banks to fly through, distant terrain with height fog, street lights, HUD time and
+      weather controls. (The WebGPU renderer was left out: a full shader rewrite for little visible gain.)
 - [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
       landmark discovery, XP and levels, challenge mode, touchdown landings, nest building and a home.
 - [x] **Phase 4b.** Hawk, optional challenges (street races, landmark sprints, feeding the chicks), sound.
