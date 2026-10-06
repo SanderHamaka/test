@@ -5,17 +5,26 @@ const BINDINGS = {
   ArrowDown: 'down', KeyS: 'down',
   Space: 'flap',
   ShiftLeft: 'dive', ShiftRight: 'dive',
+  KeyE: 'land',
 };
 
-/** Keyboard state for flight controls. */
+// Actions that trigger once per key press rather than while held.
+const PRESS_ACTIONS = new Set(['land']);
+
+/** Keyboard state for flight controls. Read `state` once per frame: it consumes one-shot presses. */
 export class Input {
   constructor(target = window) {
     this.target = target;
     this.held = new Set();
+    this.pressed = new Set();
     this.onKeyDown = (e) => {
       const action = BINDINGS[e.code];
-      if (!action || e.target instanceof HTMLInputElement) return;
-      this.held.add(action);
+      if (!action || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (PRESS_ACTIONS.has(action)) {
+        if (!e.repeat) this.pressed.add(action);
+      } else {
+        this.held.add(action);
+      }
       e.preventDefault();
     };
     this.onKeyUp = (e) => {
@@ -31,12 +40,15 @@ export class Input {
 
   get state() {
     const h = this.held;
-    return {
+    const state = {
       turn: (h.has('right') ? 1 : 0) - (h.has('left') ? 1 : 0),
       climb: (h.has('up') ? 1 : 0) - (h.has('down') ? 1 : 0),
       flap: h.has('flap'),
       dive: h.has('dive'),
+      land: this.pressed.has('land'),
     };
+    this.pressed.clear();
+    return state;
   }
 
   dispose() {

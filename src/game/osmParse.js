@@ -15,10 +15,18 @@ const WATERWAY_WIDTHS = { river: 18, canal: 10, stream: 3, ditch: 1.5, drain: 1.
 const RAIL_WIDTHS = { rail: 4, narrow_gauge: 3, light_rail: 3.5, tram: 3, subway: 4 };
 
 export function parseOsm(elements, projection) {
-  const result = { buildings: [], areas: [], lines: [], trees: [], coastlines: [] };
+  const result = { buildings: [], areas: [], lines: [], trees: [], coastlines: [], foodSpots: [], landmarks: [] };
 
   for (const el of elements) {
     const tags = el.tags ?? {};
+
+    const landmark = landmarkKind(tags);
+    const foodSpot = FOOD_AMENITIES[tags.amenity];
+    if (landmark || foodSpot) {
+      const centre = elementCentre(el, projection);
+      if (centre && landmark) result.landmarks.push({ id: `${el.type}/${el.id}`, name: tags.name, kind: landmark, x: centre[0], z: centre[1] });
+      if (centre && foodSpot) result.foodSpots.push({ type: foodSpot, x: centre[0], z: centre[1] });
+    }
 
     if (el.type === 'node') {
       if (tags.natural === 'tree') result.trees.push(...projection.toLocal(el.lat, el.lon));
@@ -47,6 +55,46 @@ export function parseOsm(elements, projection) {
     if (line) result.lines.push({ ...line, points: projectFlat(el.geometry, projection) });
   }
   return result;
+}
+
+// Places where food can be found: leftovers near places to eat, crumbs by benches.
+const FOOD_AMENITIES = {
+  restaurant: 'scraps', fast_food: 'scraps', cafe: 'scraps', ice_cream: 'scraps', pub: 'scraps', bar: 'scraps',
+  marketplace: 'scraps', bench: 'seeds',
+};
+
+const RELIGION_NAMES = { christian: 'Church', muslim: 'Mosque', jewish: 'Synagogue', buddhist: 'Temple', hindu: 'Temple' };
+
+/** A human-readable kind for named landmarks worth discovering, or null. */
+function landmarkKind(tags) {
+  if (!tags.name) return null;
+  if (tags.amenity === 'place_of_worship') return RELIGION_NAMES[tags.religion] ?? 'Place of worship';
+  if (tags.railway === 'station') return 'Station';
+  if (tags.leisure === 'stadium') return 'Stadium';
+  const manMade = { lighthouse: 'Lighthouse', windmill: 'Windmill', watermill: 'Watermill', tower: 'Tower' }[tags.man_made];
+  if (manMade) return manMade;
+  const historic = {
+    castle: 'Castle', monument: 'Monument', fort: 'Fort', city_gate: 'City gate', ruins: 'Ruins',
+    windmill: 'Windmill', church: 'Church', tower: 'Tower', manor: 'Manor',
+  }[tags.historic];
+  if (historic) return historic;
+  return {
+    attraction: 'Attraction', museum: 'Museum', viewpoint: 'Viewpoint', zoo: 'Zoo', theme_park: 'Theme park',
+    gallery: 'Gallery', aquarium: 'Aquarium',
+  }[tags.tourism] ?? null;
+}
+
+/** Centre of a node, way or relation in local metres (from its bounds when Overpass gives them). */
+function elementCentre(el, projection) {
+  if (el.type === 'node') return projection.toLocal(el.lat, el.lon);
+  if (el.bounds) {
+    return projection.toLocal((el.bounds.minlat + el.bounds.maxlat) / 2, (el.bounds.minlon + el.bounds.maxlon) / 2);
+  }
+  const points = el.geometry ?? el.members?.flatMap((m) => m.geometry ?? []) ?? [];
+  if (!points.length) return null;
+  const lat = points.reduce((sum, p) => sum + p.lat, 0) / points.length;
+  const lon = points.reduce((sum, p) => sum + p.lon, 0) / points.length;
+  return projection.toLocal(lat, lon);
 }
 
 const isOn = (value) => value != null && value !== 'no';

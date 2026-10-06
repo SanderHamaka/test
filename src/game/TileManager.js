@@ -35,6 +35,7 @@ export class TileManager {
     this.wanted = new Set(); // tile keys within load distance
     this.requests = new Map(); // request id → { block, worker }
     this.nextId = 1;
+    this.version = 0; // bumped whenever tiles are added or removed
     this.centre = null;
     this.lastGround = 0;
     this.error = null;
@@ -88,6 +89,7 @@ export class TileManager {
       if (distanceToRect(position, entry.rect) <= UNLOAD_DISTANCE) continue;
       entry.tile.dispose();
       this.tiles.delete(key);
+      this.version++;
     }
     for (const [key, block] of this.blocks) {
       if (block.state !== 'loading' && distanceToRect(position, block.rect) > UNLOAD_DISTANCE) this.blocks.delete(key);
@@ -158,6 +160,7 @@ export class TileManager {
     const tile = new Tile(data, this.resources);
     this.scene.add(tile.group);
     this.tiles.set(key, { x, y, rect, tile, partial });
+    this.version++;
     this.onChange();
   }
 

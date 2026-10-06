@@ -49,6 +49,8 @@ export class Tile {
     this.colliders = new Colliders(data.colliders);
     this.groundAt = createGridSampler(data.rect, data.heights);
     this.stats = data.stats;
+    this.food = data.food ?? new Float32Array(0);
+    this.landmarks = data.landmarks ?? [];
     this.owned = [];
 
     const group = new THREE.Group();

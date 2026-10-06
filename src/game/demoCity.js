@@ -85,6 +85,21 @@ export function generateDemoCity() {
   }
   elements.push({ type: 'way', id: id++, tags: { building: 'yes', 'roof:shape': 'pyramidal' }, geometry: closed(rect(-span - 60, streetZ + 8, 12, 12)) });
 
+  // Named landmarks to discover, and places to eat.
+  const node = (x, z, tags) => {
+    const [lat, lon] = proj.toLatLon(x, z);
+    elements.push({ type: 'node', id: id++, lat, lon, tags });
+  };
+  node(-53, -53, { amenity: 'place_of_worship', religion: 'christian', name: 'Demo Cathedral' });
+  node(0, -span - 60, { railway: 'station', name: 'Demo Central' });
+  node(-750, 120, { tourism: 'viewpoint', name: 'Lake Lookout' });
+  node(850, -950, { man_made: 'tower', name: 'Hill Tower' });
+  node(-600, 1600, { man_made: 'lighthouse', name: 'Demo Lighthouse' });
+  for (let i = 0; i < 12; i++) {
+    node(-300 + i * 53, 8, { amenity: i % 3 ? 'cafe' : 'fast_food', name: `Snack ${i + 1}` });
+    node(-280 + i * 50, -8, { amenity: 'bench' });
+  }
+
   // Coast to the south: drawn west to east, so the land is on the left (north) and the sea on the right.
   const coast = [];
   for (let x = -4000; x <= 4000; x += 50) coast.push([x, 1650 + Math.sin(x / 300) * 120 + Math.sin(x / 90) * 20]);

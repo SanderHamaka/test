@@ -4,7 +4,10 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { Bird } from './Bird.js';
+import { Bird, LAND_RANGE } from './Bird.js';
+import { FoodManager } from './food.js';
+import { Discoveries } from './discoveries.js';
+import { Gameplay } from './gameplay.js';
 import { Input } from './Input.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
@@ -27,14 +30,22 @@ export class Game {
    * @param place     { lat, lon } to fly over
    * @param demo      use the generated offline demo city instead of OSM
    * @param quality   key of QUALITY
-   * @param onHud     called ~10x per second with { altitude, speed, bump, tiles, time }
+   * @param species   entry from SPECIES
+   * @param mode      'relaxed' or 'challenge'
+   * @param progress  Progress (XP, discoveries), saved in the browser
+   * @param onHud     called ~10x per second with flight, progress and compass data
    * @param onStatus  called with { state: 'loading' | 'ready' | 'error', message }
+   * @param onNotify  called with (text, kind) for messages to the player
    */
-  constructor(canvas, place, { demo = false, quality = 'high', onHud = () => {}, onStatus = () => {} } = {}) {
+  constructor(canvas, place, {
+    demo = false, quality = 'high', species, mode = 'relaxed', progress,
+    onHud = () => {}, onStatus = () => {}, onNotify = () => {},
+  } = {}) {
     this.canvas = canvas;
     this.place = place;
     this.onHud = onHud;
     this.onStatus = onStatus;
+    this.progress = progress;
     this.paused = false;
     this.ready = false;
     this.disposed = false;
@@ -63,7 +74,10 @@ export class Game {
       return material;
     };
 
-    this.bird = new Bird();
+    this.bird = new Bird(species);
+    this.food = new FoodManager(this.scene, this.prepareMaterial);
+    this.discoveries = new Discoveries(this.scene, progress);
+    this.gameplay = new Gameplay({ species, mode, progress, bird: this.bird, notify: onNotify });
     this.bird.model.visible = false;
     this.scene.add(this.bird.model);
     this.bird.model.traverse((o) => o.material && this.prepareMaterial(o.material));
@@ -102,6 +116,7 @@ export class Game {
     });
 
     const spawnPoint = new THREE.Vector3(0, 0, 60);
+    this.spawnPoint = spawnPoint;
     await this.tiles.whenReady(spawnPoint);
     if (this.disposed) return;
     this.spawn(spawnPoint);
@@ -211,10 +226,7 @@ export class Game {
     if (this.ready && !this.paused) {
       this.date = new Date(this.date.getTime() + dt * 1000);
       this.lighting.setTime(this.date);
-
-      const events = this.bird.update(dt, this.input.state, this.tiles);
-      if (events.bump) this.shake = 1;
-      Object.assign(this.hudFlags, events);
+      this.simulate(dt, this.input.state);
       this.placeCamera(false, dt);
       this.reportHud(dt);
     }
@@ -233,6 +245,19 @@ export class Game {
     }
   }
 
+  /** One step of game logic: flight, food, discoveries and rules. */
+  simulate(dt, input) {
+    this.elapsed = (this.elapsed ?? 0) + dt;
+    const events = this.bird.update(dt, input, this.tiles);
+    this.food.sync(this.tiles);
+    this.discoveries.sync(this.tiles);
+    const eaten = this.food.update(this.elapsed, this.bird);
+    const found = this.discoveries.update(dt, this.bird);
+    if (this.gameplay.update(dt, events, eaten, found).faint) this.spawn(this.spawnPoint);
+    if (events.bump) this.shake = 1;
+    Object.assign(this.hudFlags, events);
+  }
+
   placeCamera(snap, dt = 0) {
     const bird = this.bird;
     const yawForward = new THREE.Vector3(-Math.sin(bird.yaw), 0, -Math.cos(bird.yaw));
@@ -241,7 +266,8 @@ export class Game {
     const target = bird.position.clone()
       .addScaledVector(back, this.cameraDistance)
       .add(new THREE.Vector3(0, this.cameraDistance * 0.28, 0));
-    target.y = Math.max(target.y, this.tiles.groundAt(target.x, target.z) + 1.5);
+    // Keep the camera out of roofs and hills: stay above whatever surface is below it.
+    target.y = Math.max(target.y, this.tiles.surfaceAt(target.x, target.z) + 1.5);
 
     if (snap) this.camera.position.copy(target);
     else this.camera.position.lerp(target, 1 - Math.exp(-6 * dt));
@@ -271,6 +297,14 @@ export class Game {
       bump: !!this.hudFlags.bump,
       tiles: this.tiles.status,
       time: this.solarHour,
+      stamina: this.bird.stamina / this.bird.maxStamina,
+      hunger: this.gameplay.challenge ? this.gameplay.hunger / 100 : null,
+      state: this.bird.state,
+      canLand: this.bird.state === 'flying' && p.y - this.tiles.surfaceAt(p.x, p.z) < LAND_RANGE,
+      level: this.progress.level,
+      levelProgress: this.progress.levelProgress,
+      compass: this.discoveries.compass,
+      yaw: this.bird.yaw,
     });
     this.hudFlags = {};
   }
@@ -282,6 +316,9 @@ export class Game {
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.input.dispose();
     this.tiles?.dispose();
+    this.food.dispose();
+    this.discoveries.dispose();
+    this.progress.flush();
     this.disposeComposer();
     this.lighting.dispose();
     this.bird.model.traverse((o) => {

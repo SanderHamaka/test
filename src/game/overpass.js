@@ -27,6 +27,13 @@ export function buildQuery({ south, west, north, east }) {
   way["amenity"="parking"];
   way["area:highway"];
   way["natural"="coastline"];
+  nw["amenity"~"^(restaurant|fast_food|cafe|marketplace|ice_cream|pub|bar|bench)$"];
+  nwr["name"]["tourism"~"^(attraction|museum|viewpoint|zoo|theme_park|gallery|aquarium)$"];
+  nwr["name"]["historic"~"^(castle|monument|fort|city_gate|ruins|windmill|church|tower|manor)$"];
+  nwr["name"]["amenity"="place_of_worship"];
+  nwr["name"]["man_made"~"^(tower|lighthouse|windmill|watermill)$"];
+  nwr["name"]["railway"="station"];
+  nwr["name"]["leisure"="stadium"];
   node["natural"="tree"];
 );
 out geom qt;`;

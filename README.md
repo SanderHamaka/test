@@ -1,6 +1,6 @@
-# Fly Like a Bird — anywhere
+# Birb
 
-A browser game inspired by *Fly Like a Bird 3*: search for any city or town in the world, and the game
+An open-world bird game for the browser: search for any city or town in the world, and the game
 builds it in 3D from OpenStreetMap data so you can fly over and between its buildings.
 
 Built with Svelte 5, Three.js and Vite.
@@ -24,9 +24,25 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | `W` `S` / `↑` `↓` | Climb and descend |
 | `Space` (hold) | Flap: thrust and lift |
 | `Shift` (hold) | Dive: tuck wings, fast descent |
+| `E` | Land on the roof or ground below you; `Space` or `W` takes off again |
 | Mouse wheel | Camera distance |
 | `[` `]` | Time of day −/+ 30 minutes |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
+
+## Playing
+
+After picking a place you choose a bird from the **album**: the herring gull and rock pigeon are there
+from the start, the carrion crow unlocks at level 3 and the common kestrel at level 5. Each flies
+differently (speed, agility, gliding, stamina) and prefers different food.
+
+- **Free roam** is relaxed: fly, explore and snack. Flapping uses stamina; gliding and resting restore it.
+- **Challenge** adds hunger. Hungry birds recover stamina slowly, starving birds can't flap, and landing
+  while starving makes you faint (you lose a quarter of the XP earned within your current level).
+
+Food comes from the real map: fish over water, insects over parks, seeds on fields and squares, scraps
+by snack bars, cafés and markets, mice in grassland. Fly through it to eat. Named landmarks (churches,
+towers, museums, stations, windmills…) show on the compass and under a faint beam of light; fly close to
+discover them. XP from food and discoveries raises your level. Progress is saved in the browser.
 
 ## How it works
 
@@ -70,8 +86,13 @@ button on the start screen runs the same pipeline on generated data, which is ha
    painted water colour and turns it into glossy, rippling water that reflects the sky. `skyFog.js` fades
    the distance into the sky's horizon colour in every direction, which hides the edge of the loaded tiles.
 5. **Flight** (`src/game/Bird.js`, `Colliders.js`): an arcade flight model (banking turns, gravity along
-   the flight path, flapping, diving) that follows the terrain, with collisions against building
-   footprints across tile borders. You bounce off walls and can skim across rooftops.
+   the flight path, flapping, diving) tuned per species, with stamina, landing and perching. It follows
+   the terrain, with collisions against building footprints across tile borders. You bounce off walls
+   and can skim across rooftops.
+6. **Birds** (`species.js`, `birdModel.js`, `portraits.js`): species definitions and procedural models with
+   jointed wings, tail, head and legs, painted per species; the album portraits are rendered from them.
+7. **Game** (`gameplay.js`, `food.js`, `discoveries.js`, `progress.js`): food placed per tile from the map
+   (`worldItems.js`), landmark discovery with compass and beams, rewards, hunger, levels and saving.
 
 In development (`npm run dev`) the game is exposed as `window.__game` for poking at it from the console.
 
@@ -92,5 +113,7 @@ a commercial or self-hosted tile provider.
 - [x] **Phase 3: visuals.** Block downloads, sea and coastlines, roof shapes, measured heights in the
       Netherlands, window styles, ambient occlusion and bloom, day/night cycle with lit windows and stars.
 - [ ] **Later visuals.** Distant low-detail terrain, street lights, weather and clouds, WebGPU renderer.
-- [ ] **Phase 4: the game.** Rigged bird model, missions, food, predators, nest, upgrades, sound.
+- [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
+      landmark discovery, XP and levels, challenge mode.
+- [ ] **Phase 4b.** Predators (hawk), optional challenges (races, deliveries), sound.
 - [ ] **Phase 5: polish.** Touch and gamepad controls, settings, saving progress.

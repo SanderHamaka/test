@@ -58,8 +58,8 @@
 
 <main class="search">
   <div class="panel">
-    <h1>Fly like a bird</h1>
-    <p class="tagline">Pick any city or town in the world and fly over it.</p>
+    <h1>Birb</h1>
+    <p class="tagline">Pick any city or town in the world and explore it as a bird.</p>
 
     <div class="field">
       <!-- svelte-ignore a11y_autofocus -->

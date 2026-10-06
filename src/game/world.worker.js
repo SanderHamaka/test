@@ -3,7 +3,8 @@ import { fetchOverpass } from './overpass.js';
 import { parseOsm } from './osmParse.js';
 import { buildTile } from './meshBuilder.js';
 import { paintGround } from './groundPainter.js';
-import { demoElevation, fetchTerrarium, sampleTerrarium } from './terrain.js';
+import { createGridSampler, demoElevation, fetchTerrarium, sampleTerrarium } from './terrain.js';
+import { ownedLandmarks, placeFood } from './worldItems.js';
 import { generateDemoCity } from './demoCity.js';
 import { bagId, fetchBagHeights, inNetherlands } from './bag3d.js';
 import { computeSeaMask, isSea } from './sea.js';
@@ -100,6 +101,9 @@ async function buildOne(x, y, features, projection, origin, demo) {
 
   const tile = buildTile(features, rect, elevationAt);
   tile.ground = paintGround(features, rect, sea);
+  const groundAt = createGridSampler(tile.rect, tile.heights);
+  tile.food = placeFood(features, rect, groundAt, sea ? (px, pz) => isSea(sea, rect, px, pz) : null);
+  tile.landmarks = ownedLandmarks(features, rect, groundAt);
   return tile;
 }
 
