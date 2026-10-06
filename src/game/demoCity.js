@@ -72,5 +72,22 @@ export function generateDemoCity() {
     geometry: closed(rect(-span - 200, span + 8, (span + 200) * 2, 100)),
   });
 
+  // Bridge carrying the main road over the canal, then on into the countryside.
+  const bridgeStart = span, bridgeEnd = span + 95;
+  elements.push({ type: 'way', id: id++, tags: { highway: 'primary', bridge: 'yes', layer: '1' }, geometry: geometry([[0, bridgeStart], [0, bridgeEnd]]) });
+  elements.push({ type: 'way', id: id++, tags: { highway: 'primary' }, geometry: geometry([[0, bridgeEnd], [0, 1400]]) });
+
+  // Railway along the north edge of town and a cycle path beside it.
+  elements.push({ type: 'way', id: id++, tags: { railway: 'rail' }, geometry: geometry([[-1500, -span - 60], [1500, -span - 60]]) });
+  elements.push({ type: 'way', id: id++, tags: { highway: 'cycleway' }, geometry: geometry([[-1500, -span - 72], [1500, -span - 72]]) });
+
+  // A lake to the west and a forest on the hills to the north-east.
+  const lake = [];
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 16) lake.push([-750 + Math.cos(a) * 180, 120 + Math.sin(a) * 120]);
+  elements.push({ type: 'way', id: id++, tags: { natural: 'water' }, geometry: closed(lake) });
+  elements.push({ type: 'way', id: id++, tags: { landuse: 'forest' }, geometry: closed(rect(500, -1300, 700, 750)) });
+  elements.push({ type: 'way', id: id++, tags: { landuse: 'farmland' }, geometry: closed(rect(-1400, -1300, 800, 700)) });
+  elements.push({ type: 'way', id: id++, tags: { landuse: 'residential' }, geometry: closed(rect(-span, -span, span * 2, span * 2)) });
+
   return { elements };
 }

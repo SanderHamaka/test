@@ -2,18 +2,27 @@
   import { onMount } from 'svelte';
   import { Game } from '../game/Game.js';
 
-  let { world, place, onexit } = $props();
+  let { place, demo = false, onexit } = $props();
 
   let canvas;
   let game;
-  let hud = $state({ altitude: 0, speed: 0, edge: false, bump: false });
+  let hud = $state({ altitude: 0, speed: 0, bump: false, tiles: null });
+  let status = $state({ state: 'loading', message: 'Preparing…' });
   let paused = $state(false);
   let showHelp = $state(true);
+  let hideHelpTimer;
+
+  $effect(() => {
+    if (status.state === 'ready') hideHelpTimer = setTimeout(() => (showHelp = false), 12000);
+    return () => clearTimeout(hideHelpTimer);
+  });
   let bumpFlash = $state(false);
   let bumpTimer;
 
   onMount(() => {
-    game = new Game(canvas, world, {
+    game = new Game(canvas, place, {
+      demo,
+      onStatus: (next) => (status = next),
       onHud(next) {
         hud = next;
         if (next.bump) {
@@ -23,9 +32,7 @@
         }
       },
     });
-    const hideHelp = setTimeout(() => (showHelp = false), 12000);
     return () => {
-      clearTimeout(hideHelp);
       clearTimeout(bumpTimer);
       game.dispose();
     };
@@ -37,6 +44,7 @@
   }
 
   function onkeydown(e) {
+    if (status.state !== 'ready') return;
     if (e.key === 'Escape') setPaused(!paused);
     else if (e.key === 'h' || e.key === 'H') showHelp = !showHelp;
   }
@@ -55,10 +63,25 @@
     </div>
   </div>
 
-  {#if hud.edge}<div class="notice">Edge of the map — turning back</div>{/if}
+  {#if hud.tiles?.loading}
+    <div class="tiles" title="Map tiles still loading around you">
+      <span class="dot"></span> Loading {hud.tiles.loading} map {hud.tiles.loading === 1 ? 'tile' : 'tiles'}
+    </div>
+  {/if}
   {#if bumpFlash}<div class="bump"></div>{/if}
 
-  {#if showHelp && !paused}
+  {#if status.state !== 'ready'}
+    <div class="loading">
+      <h2>{place.name}</h2>
+      {#if status.state === 'loading'}
+        <div class="spinner" aria-hidden="true"></div>
+        <p>{status.message}</p>
+      {:else}
+        <p class="error">{status.message}</p>
+        <button onclick={onexit}>Choose another place</button>
+      {/if}
+    </div>
+  {:else if showHelp && !paused}
     <div class="help">
       <div><kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> bank &amp; turn</div>
       <div><kbd>W</kbd><kbd>S</kbd> / <kbd>↑</kbd><kbd>↓</kbd> climb &amp; descend</div>
@@ -99,7 +122,6 @@
   .hud,
   .help,
   .exit,
-  .notice,
   .attribution {
     position: absolute;
     color: #fff;
@@ -163,13 +185,82 @@
     text-align: center;
   }
 
-  .notice {
-    top: 30%;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 0.5rem 1rem;
+  .tiles {
+    position: absolute;
+    top: 64px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.7rem;
     border-radius: 999px;
-    background: #0005;
+    background: #0003;
+    backdrop-filter: blur(6px);
+    color: #fff;
+    font-size: 0.8rem;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f0b429;
+    animation: pulse 1s ease-in-out infinite alternate;
+  }
+
+  @keyframes pulse {
+    to {
+      opacity: 0.3;
+    }
+  }
+
+  .loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 1rem;
+    padding: 16px;
+    text-align: center;
+    color: #fff;
+    background: linear-gradient(180deg, #4a7fb5e6 0%, #8fb8dce6 100%);
+  }
+
+  .loading h2 {
+    margin: 0;
+    font-size: 2rem;
+  }
+
+  .loading p {
+    margin: 0;
+    max-width: 480px;
+  }
+
+  .loading button {
+    padding: 0.6rem 1.1rem;
+    border: none;
+    border-radius: 10px;
+    background: #f0b429;
+    color: #1d2a36;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .spinner {
+    width: 42px;
+    height: 42px;
+    border: 4px solid #ffffff55;
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .bump {

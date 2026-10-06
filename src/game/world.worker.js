@@ -1,43 +1,69 @@
-import { bboxAround, createProjection } from './geo.js';
+import { createProjection } from './geo.js';
 import { fetchOverpass } from './overpass.js';
 import { parseOsm } from './osmParse.js';
-import { buildWorld } from './meshBuilder.js';
+import { buildTile } from './meshBuilder.js';
+import { paintGround } from './groundPainter.js';
+import { demoElevation, fetchTerrarium, sampleTerrarium } from './terrain.js';
 import { generateDemoCity } from './demoCity.js';
+import { TILE_ZOOM, lonLatToTile, tileBounds, tileRect } from './tiles.js';
 
 /**
- * Loads OSM data for a place and turns it into mesh buffers, off the main thread.
- * In:  { lat, lon, radius, demo }
- * Out: { type: 'progress', message } ... then { type: 'done', world } or { type: 'error', message }
+ * Builds map tiles off the main thread.
+ *
+ * In:  { type: 'origin', lat, lon, demo }            → { type: 'origin', elevation }
+ *      { type: 'tile', id, x, y, origin, demo }      → { type: 'tile', id, tile } | { type: 'error', id, message }
+ * origin = { lat, lon, elevation }: the world's (0, 0, 0) point. Elevations are returned relative to it.
  */
-self.onmessage = async ({ data: { lat, lon, radius, demo } }) => {
-  const progress = (message) => self.postMessage({ type: 'progress', message });
 
+let demoElements = null;
+
+self.onmessage = async ({ data }) => {
   try {
-    let osm;
-    if (demo) {
-      progress('Generating demo city…');
-      osm = generateDemoCity();
-    } else {
-      progress('Downloading map data from OpenStreetMap…');
-      osm = await fetchOverpass(bboxAround(lat, lon, radius), (bytes) => {
-        progress(`Downloading map data from OpenStreetMap… ${(bytes / 1048576).toFixed(1)} MB`);
-      });
+    if (data.type === 'origin') {
+      self.postMessage({ type: 'origin', elevation: await originElevation(data) });
+    } else if (data.type === 'tile') {
+      const tile = await loadTile(data);
+      self.postMessage({ type: 'tile', id: data.id, tile }, collectTransferables(tile));
     }
-
-    progress(`Reading ${osm.elements.length.toLocaleString()} map features…`);
-    const features = parseOsm(osm.elements, createProjection(lat, lon));
-
-    progress(`Building ${features.buildings.length.toLocaleString()} buildings in 3D…`);
-    const world = buildWorld(features, radius);
-
-    self.postMessage({ type: 'done', world }, collectBuffers(world));
   } catch (error) {
-    self.postMessage({ type: 'error', message: error.message ?? String(error) });
+    self.postMessage({ type: 'error', id: data.id, message: error.message ?? String(error) });
   }
 };
 
-function collectBuffers(value, out = []) {
+async function originElevation({ lat, lon, demo }) {
+  if (demo) return demoElevation(0, 0);
+  const { x, y } = lonLatToTile(lat, lon);
+  const heights = await fetchTerrarium(TILE_ZOOM, x, y);
+  if (!heights) return 0;
+  const b = tileBounds(x, y);
+  return sampleTerrarium(heights, (lon - b.west) / (b.east - b.west), (b.north - lat) / (b.north - b.south));
+}
+
+async function loadTile({ x, y, origin, demo }) {
+  const projection = createProjection(origin.lat, origin.lon);
+  const rect = tileRect(x, y, projection);
+
+  const [osm, terrain] = await Promise.all([
+    demo ? (demoElements ??= generateDemoCity()) : fetchOverpass(rect),
+    demo ? null : fetchTerrarium(TILE_ZOOM, x, y),
+  ]);
+
+  const elevationAt = demo
+    ? (px, pz) => demoElevation(px, pz) - origin.elevation
+    : terrain
+      ? (px, pz) => sampleTerrarium(terrain, (px - rect.minX) / (rect.maxX - rect.minX), (pz - rect.minZ) / (rect.maxZ - rect.minZ)) - origin.elevation
+      : () => 0;
+
+  const features = parseOsm(osm.elements, projection);
+  const tile = buildTile(features, rect, elevationAt);
+  tile.ground = paintGround(features, rect);
+  tile.flatTerrain = !demo && !terrain;
+  return tile;
+}
+
+function collectTransferables(value, out = []) {
   if (ArrayBuffer.isView(value)) out.push(value.buffer);
-  else if (value && typeof value === 'object') Object.values(value).forEach((v) => collectBuffers(v, out));
+  else if (typeof ImageBitmap !== 'undefined' && value instanceof ImageBitmap) out.push(value);
+  else if (value && typeof value === 'object') Object.values(value).forEach((v) => collectTransferables(v, out));
   return out;
 }

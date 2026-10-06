@@ -4,48 +4,59 @@ const ENDPOINTS = [
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
 
-const GREEN_LANDUSE = 'grass|forest|meadow|recreation_ground|village_green|cemetery|allotments|orchard';
-const GREEN_LEISURE = 'park|garden|pitch|playground|golf_course|nature_reserve|dog_park';
-const NATURAL_AREAS = 'wood|grassland|scrub|heath|beach|sand|wetland';
+// Bump when the query changes so stale cached tiles aren't reused.
+const CACHE_NAME = 'osm-tiles-v2';
+
+const LEISURE_AREAS = 'park|garden|pitch|playground|golf_course|nature_reserve|dog_park|track|common';
+const NATURAL_AREAS = 'water|wood|grassland|scrub|heath|beach|sand|wetland|bare_rock|scree';
 
 export function buildQuery({ south, west, north, east }) {
-  const bbox = `${south},${west},${north},${east}`;
+  const bbox = [south, west, north, east].map((v) => v.toFixed(7)).join(',');
   return `[out:json][timeout:90][bbox:${bbox}];
 (
   way["building"];
   relation["building"]["type"="multipolygon"];
-  way["highway"]["area"!="yes"];
-  way["natural"="water"];
-  relation["natural"="water"];
-  way["waterway"~"^(river|canal|stream|riverbank|dock)$"];
-  way["landuse"~"^(${GREEN_LANDUSE})$"];
-  relation["landuse"~"^(${GREEN_LANDUSE})$"];
-  way["leisure"~"^(${GREEN_LEISURE})$"];
-  relation["leisure"~"^(${GREEN_LEISURE})$"];
+  way["highway"];
+  way["railway"~"^(rail|tram|light_rail|narrow_gauge|subway)$"];
+  way["waterway"~"^(river|canal|stream|riverbank|dock|ditch|drain)$"];
+  way["landuse"];
+  relation["landuse"];
+  way["leisure"~"^(${LEISURE_AREAS})$"];
+  relation["leisure"~"^(${LEISURE_AREAS})$"];
   way["natural"~"^(${NATURAL_AREAS})$"];
   relation["natural"~"^(${NATURAL_AREAS})$"];
+  way["amenity"="parking"];
+  way["area:highway"];
   node["natural"="tree"];
 );
 out geom qt;`;
 }
 
 /**
- * Fetches OSM data from the first Overpass endpoint that answers.
- * Reports downloaded bytes through onProgress so the loading screen can show activity.
+ * Fetches OSM data for a bounding box. Requests are GETs so they can be stored with the Cache API:
+ * flying back over a place never asks the shared Overpass servers for the same tile again.
  */
-export async function fetchOverpass(bbox, onProgress = () => {}) {
-  const body = 'data=' + encodeURIComponent(buildQuery(bbox));
-  let lastError;
+export async function fetchOverpass(bbox) {
+  const query = encodeURIComponent(buildQuery(bbox));
+  const cache = await openCache();
+  const urls = ENDPOINTS.map((endpoint) => `${endpoint}?data=${query}`);
+  for (const url of urls) {
+    const cached = await cache?.match(url);
+    if (cached) return cached.json();
+  }
 
-  for (const endpoint of ENDPOINTS) {
+  let lastError;
+  for (const [i, url] of urls.entries()) {
+    const endpoint = ENDPOINTS[i];
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
+      const response = await fetch(url);
       if (!response.ok) throw new Error(`${endpoint} answered ${response.status}`);
-      return JSON.parse(await readWithProgress(response, onProgress));
+      const text = await response.text();
+      const data = JSON.parse(text);
+      // Overpass reports timeouts and overload inside a 200 response.
+      if (data.remark && /runtime error|timed out|out of memory/i.test(data.remark)) throw new Error(data.remark);
+      cache?.put(url, new Response(text, { headers: { 'Content-Type': 'application/json' } })).catch(() => {});
+      return data;
     } catch (error) {
       lastError = error;
     }
@@ -53,19 +64,10 @@ export async function fetchOverpass(bbox, onProgress = () => {}) {
   throw new Error(`Could not load map data (${lastError?.message ?? 'unknown error'})`);
 }
 
-async function readWithProgress(response, onProgress) {
-  if (!response.body) return response.text();
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let bytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    bytes += value.byteLength;
-    text += decoder.decode(value, { stream: true });
-    onProgress(bytes);
+async function openCache() {
+  try {
+    return await caches.open(CACHE_NAME);
+  } catch {
+    return null; // Cache API unavailable (e.g. insecure context): just don't cache.
   }
-  return text + decoder.decode();
 }

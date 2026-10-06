@@ -21,10 +21,3 @@ export function createProjection(lat0, lon0) {
     },
   };
 }
-
-/** Bounding box (south, west, north, east) of a square with the given half-size in metres. */
-export function bboxAround(lat, lon, radius) {
-  const dLat = radius / (EARTH_RADIUS * DEG);
-  const dLon = radius / (EARTH_RADIUS * DEG * Math.cos(lat * DEG));
-  return { south: lat - dLat, west: lon - dLon, north: lat + dLat, east: lon + dLon };
-}

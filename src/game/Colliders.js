@@ -1,5 +1,5 @@
 const CELL = 40;
-const STRIDE = 8; // firstRing, ringCount, minHeight, height, minX, minZ, maxX, maxZ
+const STRIDE = 8; // firstRing, ringCount, bottom, top, minX, minZ, maxX, maxZ
 
 /** Spatial grid over building footprints for fast "am I inside a building?" tests. */
 export class Colliders {
@@ -22,7 +22,7 @@ export class Colliders {
     }
   }
 
-  /** Buildings whose footprint contains (x, z). Calls fn(minHeight, height, index) for each. */
+  /** Buildings whose footprint contains (x, z). Calls fn(bottom, top, index) for each. */
   forEachAt(x, z, fn) {
     const cell = this.grid.get(Math.floor(x / CELL) * 65536 + Math.floor(z / CELL));
     if (!cell) return;
@@ -32,13 +32,6 @@ export class Colliders {
       if (x < b[o + 4] || x > b[o + 6] || z < b[o + 5] || z > b[o + 7]) continue;
       if (this.contains(i, x, z)) fn(b[o + 2], b[o + 3], i);
     }
-  }
-
-  /** Highest roof under (x, z), or 0 for open ground. */
-  heightAt(x, z) {
-    let top = 0;
-    this.forEachAt(x, z, (_, height) => (top = Math.max(top, height)));
-    return top;
   }
 
   /** Even-odd test over all rings, so courtyards (holes) count as outside. */

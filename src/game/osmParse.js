@@ -6,12 +6,13 @@
 const ROAD_WIDTHS = {
   motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 8,
   motorway_link: 7, trunk_link: 7, primary_link: 7, secondary_link: 7, tertiary_link: 6,
-  residential: 6.5, unclassified: 6, living_street: 5, service: 4, road: 6,
-  pedestrian: 5, track: 3, footway: 2, path: 2, cycleway: 2.2, bridleway: 2, steps: 2,
+  residential: 6.5, unclassified: 6, living_street: 5, service: 4, road: 6, busway: 6,
+  pedestrian: 5, track: 3, footway: 2, path: 1.6, cycleway: 2.2, bridleway: 2, steps: 2,
 };
-const SKIP_HIGHWAYS = new Set(['proposed', 'construction', 'abandoned', 'platform', 'bus_stop', 'elevator', 'raceway']);
+const SKIP_HIGHWAYS = new Set(['proposed', 'construction', 'abandoned', 'platform', 'bus_stop', 'elevator', 'raceway', 'corridor']);
 const PATH_HIGHWAYS = new Set(['footway', 'path', 'cycleway', 'bridleway', 'steps', 'track', 'pedestrian']);
-const WATERWAY_WIDTHS = { river: 18, canal: 10, stream: 3 };
+const WATERWAY_WIDTHS = { river: 18, canal: 10, stream: 3, ditch: 1.5, drain: 1.5 };
+const RAIL_WIDTHS = { rail: 4, narrow_gauge: 3, light_rail: 3.5, tram: 3, subway: 4 };
 
 export function parseOsm(elements, projection) {
   const result = { buildings: [], areas: [], lines: [], trees: [] };
@@ -31,43 +32,67 @@ export function parseOsm(elements, projection) {
       continue;
     }
 
-    const areaKind = classifyArea(tags);
+    const areaKind = classifyArea(tags, polygons.length > 0);
     if (areaKind) {
       for (const rings of polygons) result.areas.push({ kind: areaKind, rings, tags });
       continue;
     }
 
     if (el.type !== 'way' || !el.geometry) continue;
-
-    if (tags.highway && !SKIP_HIGHWAYS.has(tags.highway) && tags.tunnel !== 'yes') {
-      const width = parseFloat(tags.width) || ROAD_WIDTHS[tags.highway] || 4;
-      result.lines.push({
-        kind: PATH_HIGHWAYS.has(tags.highway) ? 'path' : 'road',
-        width: Math.min(width, 30),
-        points: projectFlat(el.geometry, projection),
-      });
-    } else if (WATERWAY_WIDTHS[tags.waterway] && tags.tunnel !== 'culvert') {
-      result.lines.push({
-        kind: 'waterway',
-        width: parseFloat(tags.width) || WATERWAY_WIDTHS[tags.waterway],
-        points: projectFlat(el.geometry, projection),
-      });
-    }
+    const line = classifyLine(tags);
+    if (line) result.lines.push({ ...line, points: projectFlat(el.geometry, projection) });
   }
   return result;
 }
 
-function classifyArea(tags) {
-  const { natural, landuse, leisure, waterway } = tags;
-  if (natural === 'water' || waterway === 'riverbank' || waterway === 'dock') return 'water';
-  if (landuse === 'forest' || natural === 'wood') return 'forest';
-  if (leisure === 'pitch') return 'pitch';
-  if (natural === 'beach' || natural === 'sand') return 'sand';
-  if (leisure === 'park' || leisure === 'garden' || landuse === 'cemetery' || landuse === 'orchard') return 'park';
-  if (landuse || leisure || natural === 'grassland' || natural === 'heath' || natural === 'scrub' || natural === 'wetland') {
-    return 'grass';
+const isOn = (value) => value != null && value !== 'no';
+
+function classifyLine(tags) {
+  const common = { bridge: isOn(tags.bridge), layer: parseInt(tags.layer, 10) || 0 };
+  const tunnel = isOn(tags.tunnel) || tags.covered === 'yes' || tags.location === 'underground';
+
+  if (tags.highway && !SKIP_HIGHWAYS.has(tags.highway)) {
+    if (tunnel) return null;
+    return {
+      kind: PATH_HIGHWAYS.has(tags.highway) ? 'path' : 'road',
+      type: tags.highway,
+      width: Math.min(parseFloat(tags.width) || ROAD_WIDTHS[tags.highway] || 4, 30),
+      ...common,
+    };
+  }
+  if (RAIL_WIDTHS[tags.railway] && !tunnel) {
+    return { kind: 'rail', type: tags.railway, width: RAIL_WIDTHS[tags.railway], ...common };
+  }
+  if (WATERWAY_WIDTHS[tags.waterway] && tags.tunnel !== 'culvert' && !tunnel) {
+    return { kind: 'waterway', type: tags.waterway, width: parseFloat(tags.width) || WATERWAY_WIDTHS[tags.waterway], ...common };
   }
   return null;
+}
+
+const LANDUSE_KINDS = {
+  forest: 'forest', grass: 'grass', meadow: 'grass', village_green: 'grass', recreation_ground: 'grass',
+  greenfield: 'grass', flowerbed: 'park', cemetery: 'cemetery', allotments: 'allotments', orchard: 'orchard',
+  vineyard: 'orchard', farmland: 'farmland', farmyard: 'farmyard', residential: 'residential',
+  commercial: 'commercial', retail: 'commercial', industrial: 'industrial', railway: 'industrial', port: 'industrial',
+  construction: 'construction', brownfield: 'construction', landfill: 'construction', quarry: 'construction',
+  basin: 'water', reservoir: 'water', military: 'industrial', education: 'residential', religious: 'residential',
+};
+const NATURAL_KINDS = {
+  water: 'water', wood: 'forest', grassland: 'grass', heath: 'scrub', scrub: 'scrub', wetland: 'wetland',
+  beach: 'sand', sand: 'sand', bare_rock: 'rock', scree: 'rock',
+};
+const LEISURE_KINDS = {
+  park: 'park', garden: 'park', dog_park: 'park', common: 'grass', nature_reserve: 'grass', golf_course: 'golf',
+  pitch: 'pitch', playground: 'playground', track: 'track',
+};
+
+function classifyArea(tags, closed) {
+  if (!closed) return null;
+  const { waterway } = tags;
+  if (waterway === 'riverbank' || waterway === 'dock') return 'water';
+  if (tags['area:highway'] || (tags.highway && tags.area === 'yes')) return 'paved';
+  if (tags.amenity === 'parking') return 'parking';
+  return NATURAL_KINDS[tags.natural] ?? LEISURE_KINDS[tags.leisure] ?? LANDUSE_KINDS[tags.landuse] ?? null;
 }
 
 function projectFlat(geometry, projection) {

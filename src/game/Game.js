@@ -1,27 +1,35 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
-import { createWorld } from './World.js';
 import { Bird } from './Bird.js';
 import { Input } from './Input.js';
 import { SkyFog } from './skyFog.js';
+import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
 
 const SUN_ELEVATION = 38;
 const SUN_AZIMUTH = 30; // degrees from south (+z) towards east (+x)
 const SHADOW_EXTENT = 170;
 const SHADOW_MAP_SIZE = 2048;
-// The sky box must enclose the base ground plane, and its corners must stay inside the camera's far plane.
+// The sky box follows the camera; its corners must stay inside the camera's far plane.
 const SKY_SIZE = 18000;
+// Fully fogged just before the edge of the loaded tiles, so they never show a hard border.
+const FOG_NEAR = 450;
+const FOG_FAR = LOAD_DISTANCE + 100;
 
 export class Game {
   /**
-   * @param canvas  canvas element to render into
-   * @param data    world buffers produced by the worker
-   * @param onHud   called ~10x per second with { altitude, speed, edge, bump }
+   * @param canvas    canvas element to render into
+   * @param place     { lat, lon } to fly over
+   * @param demo      use the generated offline demo city instead of OSM
+   * @param onHud     called ~10x per second with { altitude, speed, bump, tiles }
+   * @param onStatus  called with { state: 'loading' | 'ready' | 'error', message }
    */
-  constructor(canvas, data, { onHud = () => {} } = {}) {
+  constructor(canvas, place, { demo = false, onHud = () => {}, onStatus = () => {} } = {}) {
     this.canvas = canvas;
     this.onHud = onHud;
+    this.onStatus = onStatus;
     this.paused = false;
+    this.ready = false;
+    this.disposed = false;
     this.cameraDistance = 9;
     this.shake = 0;
     this.hudTimer = 0;
@@ -35,21 +43,24 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.8, 18000);
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.8, SKY_SIZE);
+    this.camera.position.set(0, 80, 80);
+    this.camera.lookAt(0, 60, 0);
 
     this.sunDirection = new THREE.Vector3().setFromSphericalCoords(
       1, THREE.MathUtils.degToRad(90 - SUN_ELEVATION), THREE.MathUtils.degToRad(SUN_AZIMUTH),
     );
-    this.setupSky(data.radius);
+    this.setupSky();
     this.setupLights();
 
-    this.world = createWorld(data);
-    this.scene.add(this.world.group);
-
     this.bird = new Bird();
+    this.bird.model.visible = false;
     this.scene.add(this.bird.model);
-    this.spawn();
-    this.scene.traverse((o) => o.material && this.skyFog.apply(o.material));
+    this.prepareMaterial = (material) => {
+      this.skyFog.apply(material);
+      return material;
+    };
+    this.bird.model.traverse((o) => o.material && this.prepareMaterial(o.material));
 
     this.input = new Input();
     this.onWheel = (e) => {
@@ -64,9 +75,46 @@ export class Game {
 
     this.timer = new THREE.Timer();
     this.renderer.setAnimationLoop((time) => this.frame(time));
+    this.start(place, demo);
+    if (import.meta.env.DEV) window.__game = this; // handy for poking at the scene from the console
   }
 
-  setupSky(radius) {
+  async start(place, demo) {
+    this.onStatus({ state: 'loading', message: 'Finding the ground…' });
+    const elevation = await resolveOriginElevation(place.lat, place.lon, demo);
+    if (this.disposed) return;
+
+    this.tiles = new TileManager({
+      origin: { lat: place.lat, lon: place.lon, elevation },
+      demo,
+      renderer: this.renderer,
+      scene: this.scene,
+      prepareMaterial: this.prepareMaterial,
+      onChange: () => this.reportTileStatus(),
+    });
+
+    try {
+      const spawnPoint = new THREE.Vector3(0, 0, 60);
+      await this.tiles.whenReady(spawnPoint);
+      if (this.disposed) return;
+      this.spawn(spawnPoint);
+      this.ready = true;
+      this.onStatus({ state: 'ready' });
+    } catch (error) {
+      if (!this.disposed) this.onStatus({ state: 'error', message: error.message });
+    }
+  }
+
+  reportTileStatus() {
+    if (this.ready || !this.tiles) return;
+    const { error } = this.tiles.status;
+    this.onStatus({
+      state: 'loading',
+      message: error ? `Map server busy, retrying… (${error})` : 'Downloading map data from OpenStreetMap…',
+    });
+  }
+
+  setupSky() {
     const sky = new Sky();
     sky.scale.setScalar(SKY_SIZE);
     const u = sky.material.uniforms;
@@ -92,9 +140,8 @@ export class Game {
     skyCopy.geometry.dispose();
     skyCopy.material.dispose();
 
-    // Fog that fades into the sky's horizon colour hides the edge of the loaded area.
-    // Its colour comes from SkyFog; THREE.Fog only provides the near/far distances.
-    this.scene.fog = new THREE.Fog(0xffffff, radius * 0.45, radius * 1.35);
+    // Fog fades into the sky's horizon colour (from SkyFog); THREE.Fog only provides the distances.
+    this.scene.fog = new THREE.Fog(0xffffff, FOG_NEAR, FOG_FAR);
     this.skyFog = new SkyFog(this.renderer, sky);
   }
 
@@ -113,13 +160,15 @@ export class Game {
     this.sun = sun;
   }
 
-  spawn() {
-    // Start above the tallest building near the centre, facing north.
-    let tallest = 0;
+  /** Start above the tallest building near the spawn point, facing north. */
+  spawn(point) {
+    let top = -Infinity;
     for (let x = -150; x <= 150; x += 10) {
-      for (let z = -150; z <= 150; z += 10) tallest = Math.max(tallest, this.world.colliders.heightAt(x, z));
+      for (let z = -150; z <= 150; z += 10) top = Math.max(top, this.tiles.surfaceAt(point.x + x, point.z + z));
     }
-    this.bird.spawn(0, Math.max(60, tallest + 30), 60, 0);
+    const ground = this.tiles.groundAt(point.x, point.z);
+    this.bird.spawn(point.x, Math.max(ground + 60, top + 30), point.z, 0);
+    this.bird.model.visible = true;
     this.placeCamera(true);
   }
 
@@ -139,14 +188,17 @@ export class Game {
     this.timer.update(time);
     const dt = Math.min(this.timer.getDelta(), 1 / 20);
 
-    if (!this.paused) {
-      const events = this.bird.update(dt, this.input.state, this.world);
+    if (this.tiles) this.tiles.update(this.ready ? this.bird.position : { x: 0, z: 60 }, this.paused ? 0 : dt);
+
+    if (this.ready && !this.paused) {
+      const events = this.bird.update(dt, this.input.state, this.tiles);
       if (events.bump) this.shake = 1;
       Object.assign(this.hudFlags, events);
       this.placeCamera(false, dt);
       this.updateShadowCamera();
       this.reportHud(dt);
     }
+    this.sky.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -158,7 +210,7 @@ export class Game {
     const target = bird.position.clone()
       .addScaledVector(back, this.cameraDistance)
       .add(new THREE.Vector3(0, this.cameraDistance * 0.28, 0));
-    target.y = Math.max(target.y, 1.5);
+    target.y = Math.max(target.y, this.tiles.groundAt(target.x, target.z) + 1.5);
 
     if (snap) this.camera.position.copy(target);
     else this.camera.position.lerp(target, 1 - Math.exp(-6 * dt));
@@ -197,20 +249,21 @@ export class Game {
     this.hudTimer = 0;
     const p = this.bird.position;
     this.onHud({
-      altitude: p.y - this.world.colliders.heightAt(p.x, p.z),
+      altitude: p.y - this.tiles.surfaceAt(p.x, p.z),
       speed: this.bird.speed * 3.6,
-      edge: !!this.hudFlags.edge,
       bump: !!this.hudFlags.bump,
+      tiles: this.tiles.status,
     });
     this.hudFlags = {};
   }
 
   dispose() {
+    this.disposed = true;
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.input.dispose();
-    this.world.dispose();
+    this.tiles?.dispose();
     this.envTarget.dispose();
     this.skyFog.dispose();
     this.sky.geometry.dispose();

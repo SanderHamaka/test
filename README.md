@@ -32,23 +32,34 @@ button on the start screen runs the same pipeline on generated data, which is ha
 1. **Search** (`src/lib/Search.svelte`, `src/lib/geocode.js`): search-as-you-type through
    [Photon](https://photon.komoot.io). [Nominatim](https://nominatim.org) is the fallback, used only when you
    press Enter, because its usage policy doesn't allow autocomplete.
-2. **Download** (`src/game/overpass.js`): one [Overpass API](https://overpass-api.de) query for an
-   area of about 1.8 × 1.8 km gets buildings, roads, water, green areas and trees. It tries a few public
-   endpoints in turn.
-3. **Build** (`src/game/world.worker.js`): runs in a Web Worker so the page stays responsive.
-   - `osmParse.js` projects coordinates to local metres, stitches multipolygon relations, classifies
-     features and estimates building heights from `height`, `building:levels` or the building type.
-   - `meshBuilder.js` extrudes buildings (walls plus earcut-triangulated roofs, with courtyards), makes road
-     and river ribbons and flat areas, scatters trees in parks and forests, and packs footprints for
-     collision. Buildings are grouped into 250 m chunks so off-screen chunks are culled. All buffers are
-     transferred to the main thread without copying.
-4. **Render** (`src/game/Game.js`, `World.js`): Three.js with a physical sky, sky-based image lighting,
-   shadows that follow the bird, procedural windows in the building shader, and instanced trees.
-   `skyFog.js` fades the distance into the sky's own horizon colour in every direction, which hides the
-   edge of the loaded area.
-5. **Fly** (`src/game/Bird.js`, `Colliders.js`): an arcade flight model (banking turns, gravity along
-   the flight path, flapping, diving) with collisions against building footprints from a spatial grid.
-   You bounce off walls and can skim across rooftops.
+2. **Streaming tiles** (`src/game/TileManager.js`): the world is split into standard zoom-15 map tiles
+   (about 750 m across in the Netherlands, 1.2 km at the equator). Tiles within 1.3 km of the bird load
+   nearest-first, and tiles more than 2.1 km away are unloaded. The place you picked becomes the world origin
+   (0, 0, 0). Each tile's geometry is stored relative to the tile's own centre, so precision holds far from
+   the start.
+3. **Building a tile** (`src/game/world.worker.js`, two Web Workers):
+   - `overpass.js` downloads the tile's OSM data from the [Overpass API](https://overpass-api.de) with GET
+     requests stored in the browser's Cache API, so a tile is only ever downloaded once.
+   - `terrain.js` decodes [Terrarium](https://registry.opendata.aws/terrain-tiles/) elevation tiles from AWS
+     Open Data (same tile grid, so they line up exactly).
+   - `osmParse.js` projects coordinates to local metres, stitches multipolygon relations, classifies land
+     use, roads, railways and waterways, and estimates building heights.
+   - `meshBuilder.js` builds the terrain mesh (with skirts that hide cracks between tiles), extrudes
+     buildings onto the lowest ground under them, makes 3D bridge decks, scatters trees in woods and parks
+     (kept off roads and water), and packs footprints for collision. Each building, tree and bridge is owned
+     by exactly one tile, so nothing appears twice.
+   - `groundPainter.js` paints the ground into a 1024 × 1024 texture on an OffscreenCanvas: land use, water,
+     roads with sidewalks and centre lines, red cycle paths, railways, and soft contact shadows around
+     buildings. Painting instead of layering flat meshes drapes perfectly over hills and never z-fights.
+4. **Rendering** (`src/game/Game.js`, `Tile.js`): Three.js with a physical sky, sky-based image lighting,
+   shadows that follow the bird, procedural windows, and instanced trees. The terrain shader recognises the
+   painted water colour and turns it into glossy, rippling water that reflects the sky. `skyFog.js` fades
+   the distance into the sky's horizon colour in every direction, which hides the edge of the loaded tiles.
+5. **Flight** (`src/game/Bird.js`, `Colliders.js`): an arcade flight model (banking turns, gravity along
+   the flight path, flapping, diving) that follows the terrain, with collisions against building
+   footprints across tile borders. You bounce off walls and can skim across rooftops.
+
+In development (`npm run dev`) the game is exposed as `window.__game` for poking at it from the console.
 
 ## Data and attribution
 
@@ -60,9 +71,9 @@ a commercial or self-hosted tile provider.
 ## Roadmap
 
 - [x] **Phase 1: prototype.** Search, load an area, extruded city, flyable bird, collisions.
-- [ ] **Phase 2: streaming world.** Vector tiles loaded around the bird, terrain elevation, bridges,
-      floating origin for unlimited range.
-- [ ] **Phase 3: visuals.** Roof shapes, richer facade materials, animated water, post-processing (SSAO,
-      bloom), day/night cycle with lit windows, WebGPU renderer.
+- [x] **Phase 2: streaming world.** Map tiles loaded around the bird, terrain elevation, painted ground
+      with glossy water, bridges, tile-relative geometry for range.
+- [ ] **Phase 3: visuals.** Sea and coastlines, roof shapes, richer facade materials, post-processing
+      (SSAO, bloom), day/night cycle with lit windows, distant low-detail terrain, WebGPU renderer.
 - [ ] **Phase 4: the game.** Rigged bird model, missions, food, predators, nest, upgrades, sound.
 - [ ] **Phase 5: polish.** Touch and gamepad controls, settings, saving progress.

@@ -5,7 +5,7 @@ const damp = (current, target, lambda, dt) => current + (target - current) * (1 
 const MIN_SPEED = 7;
 const MAX_SPEED = 75;
 const CRUISE_SPEED = 20;
-const MAX_ALTITUDE = 800;
+const MAX_HEIGHT_ABOVE_GROUND = 700;
 const BODY_RADIUS = 0.7;
 
 /**
@@ -42,7 +42,7 @@ export class Bird {
 
   /**
    * @param input { turn: -1..1 (right +), climb: -1..1, flap: bool, dive: bool }
-   * @param world { colliders, radius }
+   * @param world { groundAt(x, z), forEachBuildingAt(x, z, fn) }, e.g. the TileManager
    * @returns events that happened this frame, e.g. { bump: true }
    */
   update(dt, input, world) {
@@ -72,38 +72,25 @@ export class Bird {
     const sink = input.flap ? -3.2 : 1.6 * (1 - Math.min(this.speed / 35, 0.8));
     this.position.y -= sink * dt;
 
-    this.keepInBounds(dt, world.radius, events);
-    this.collide(previous, world.colliders, events);
+    this.keepAboveGround(dt, world.groundAt(this.position.x, this.position.z));
+    this.collide(previous, world, events);
     this.animate(dt, input);
     return events;
   }
 
-  keepInBounds(dt, radius, events) {
+  keepAboveGround(dt, ground) {
     const p = this.position;
-    const distance = Math.hypot(p.x, p.z);
-    if (distance > radius * 0.92) {
-      events.edge = true;
-      // Steer back towards the centre.
-      const home = Math.atan2(p.x, p.z); // yaw that faces the origin
-      let delta = home - this.yaw;
-      delta = Math.atan2(Math.sin(delta), Math.cos(delta));
-      this.yaw += Math.sign(delta) * Math.min(Math.abs(delta), 1.2 * dt);
-    }
-    if (distance > radius * 1.1) {
-      p.x *= (radius * 1.1) / distance;
-      p.z *= (radius * 1.1) / distance;
-    }
-    if (p.y > MAX_ALTITUDE) p.y = MAX_ALTITUDE;
-    if (p.y < BODY_RADIUS) {
-      p.y = BODY_RADIUS;
+    if (p.y > ground + MAX_HEIGHT_ABOVE_GROUND) p.y = ground + MAX_HEIGHT_ABOVE_GROUND;
+    if (p.y < ground + BODY_RADIUS) {
+      p.y = ground + BODY_RADIUS;
       if (this.pitch < 0) this.pitch = 0;
       this.speed = Math.max(MIN_SPEED, this.speed - 10 * dt);
     }
   }
 
-  collide(previous, colliders, events) {
+  collide(previous, world, events) {
     const p = this.position;
-    colliders.forEachAt(p.x, p.z, (minHeight, height, index) => {
+    world.forEachBuildingAt(p.x, p.z, (minHeight, height, colliders, index) => {
       if (p.y < minHeight - BODY_RADIUS || p.y > height + BODY_RADIUS) return;
 
       if (previous.y >= height) {
