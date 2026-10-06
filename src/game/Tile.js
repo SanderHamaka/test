@@ -18,6 +18,17 @@ export class TileResources {
     this.bridgeMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
     this.flatGroundMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ color: 0xa5a98c, roughness: 1 }));
 
+    // Street lamps: pole, glowing head and a pool of light on the ground, shared by all tiles.
+    this.poleGeometry = new THREE.CylinderGeometry(0.07, 0.11, 6.2, 6).translate(0, 3.1, 0);
+    this.headGeometry = new THREE.BoxGeometry(0.55, 0.16, 0.32).translate(0, 6.25, 0);
+    this.poolGeometry = new THREE.PlaneGeometry(16, 16).rotateX(-Math.PI / 2).translate(0, 0.3, 0);
+    this.poleMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.6, metalness: 0.4 }));
+    this.headMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ color: 0xd8d2c0, emissive: 0xffc98a, emissiveIntensity: 0 }));
+    this.poolMaterial = new THREE.MeshBasicMaterial({
+      map: lightPoolTexture(), color: 0xffb870, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+      depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
+
     this.trunkGeometry = new THREE.CylinderGeometry(0.18, 0.28, 1, 6).translate(0, 0.5, 0);
     this.crownGeometry = new THREE.IcosahedronGeometry(1, 1);
     this.trunkMaterial = prepareMaterial(new THREE.MeshStandardMaterial({ color: 0x5b4636, roughness: 1 }));
@@ -36,8 +47,17 @@ export class TileResources {
     return { material, owned: [material, texture] };
   }
 
+  /** Street lights come on at dusk. */
+  setNight(night) {
+    this.headMaterial.emissiveIntensity = night * 6;
+    this.poolMaterial.opacity = night * 0.55;
+    this.poolMaterial.visible = night > 0.03;
+  }
+
   dispose() {
+    this.poolMaterial.map.dispose();
     for (const item of [
+      this.poleGeometry, this.headGeometry, this.poolGeometry, this.poleMaterial, this.headMaterial, this.poolMaterial,
       this.buildingMaterial, this.bridgeMaterial, this.flatGroundMaterial,
       this.trunkGeometry, this.crownGeometry, this.trunkMaterial, this.crownMaterial,
     ]) item.dispose();
@@ -82,6 +102,7 @@ export class Tile {
     }
 
     if (data.trees.length) this.addTrees(data.trees, resources);
+    if (data.lamps?.length) this.addLamps(data.lamps, data.center, resources);
     this.indexTrees(data.trees, data.center);
   }
 
@@ -141,6 +162,29 @@ export class Tile {
   own(item) {
     this.owned.push(item);
     return item;
+  }
+
+  addLamps(data, [cx, cz], resources) {
+    const count = data.length / 3;
+    const parts = [
+      [resources.poleGeometry, resources.poleMaterial, true],
+      [resources.headGeometry, resources.headMaterial, false],
+      [resources.poolGeometry, resources.poolMaterial, false],
+    ];
+    const matrix = new THREE.Matrix4();
+    const rotation = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const [geometry, material, shadows] of parts) {
+      const mesh = this.own(new THREE.InstancedMesh(geometry, material, count));
+      for (let i = 0; i < count; i++) {
+        rotation.setFromAxisAngle(up, (data[i * 3] * 7.1 + data[i * 3 + 2] * 3.3) % (Math.PI * 2));
+        matrix.compose(new THREE.Vector3(data[i * 3] - cx, data[i * 3 + 1], data[i * 3 + 2] - cz), rotation, new THREE.Vector3(1, 1, 1));
+        mesh.setMatrixAt(i, matrix);
+      }
+      mesh.castShadow = shadows;
+      mesh.computeBoundingSphere();
+      this.group.add(mesh);
+    }
   }
 
   addTrees(data, resources) {
@@ -204,6 +248,7 @@ function createBuildingMaterial(uniforms) {
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
   material.onBeforeCompile = (shader) => {
     shader.uniforms.night = uniforms.night;
+    shader.uniforms.wet = uniforms.wet;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec3 facade;\nvarying vec3 vFacade;\nvarying vec3 vWallNormal;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = facade;\nvWallNormal = normal;');
@@ -213,6 +258,7 @@ function createBuildingMaterial(uniforms) {
         varying vec3 vFacade;
         varying vec3 vWallNormal;
         uniform float night;
+        uniform float wet;
         float hash1(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float windowMask = 0.0;
@@ -248,7 +294,7 @@ function createBuildingMaterial(uniforms) {
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, windowMask);
           diffuseColor.rgb *= mix(1.0, 0.72, windowFade);
         }`)
-      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.1, windowMask);')
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.1, windowMask) * mix(1.0, 0.45, wet);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.5, windowMask);')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         if (vFacade.z > 0.75) {
@@ -272,13 +318,14 @@ function createTerrainMaterial(texture, time, uniforms) {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.waterTime = time;
     shader.uniforms.night = uniforms.night;
+    shader.uniforms.wet = uniforms.wet;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvWaterWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
 
     const w = WATER_LINEAR;
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;\nuniform float waterTime;\nuniform float night;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorld;\nuniform float waterTime;\nuniform float night;\nuniform float wet;')
       .replace('#include <map_fragment>', `#include <map_fragment>
         const vec3 waterColour = vec3(${w.r.toFixed(5)}, ${w.g.toFixed(5)}, ${w.b.toFixed(5)});
         float waterMask = 1.0 - smoothstep(0.02, 0.06, distance(diffuseColor.rgb, waterColour));
@@ -287,10 +334,12 @@ function createTerrainMaterial(texture, time, uniforms) {
         vec3 c = diffuseColor.rgb;
         float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
         float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
-        float roadMask = (1.0 - smoothstep(0.012, 0.03, sat)) * smoothstep(0.03, 0.045, lum) * (1.0 - smoothstep(0.13, 0.17, lum)) * (1.0 - waterMask);`)
+        float roadMask = (1.0 - smoothstep(0.012, 0.03, sat)) * smoothstep(0.03, 0.045, lum) * (1.0 - smoothstep(0.13, 0.17, lum)) * (1.0 - waterMask);
+        // Rain darkens the ground a little and makes paved surfaces shiny.
+        diffuseColor.rgb *= mix(1.0, 0.82, wet * (1.0 - waterMask));`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        totalEmissiveRadiance += vec3(1.0, 0.6, 0.28) * roadMask * night * 0.05;`)
-      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.05, waterMask);')
+        totalEmissiveRadiance += vec3(1.0, 0.6, 0.28) * roadMask * night * 0.015;`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, 0.25 + 0.55 * (1.0 - roadMask), wet), 0.05, waterMask);')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         if (waterMask > 0.0) {
           vec2 p = vWaterWorld.xz;
@@ -305,4 +354,19 @@ function createTerrainMaterial(texture, time, uniforms) {
         }`);
   };
   return material;
+}
+
+/** Soft round light pool, bright in the middle. */
+function lightPoolTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
 }

@@ -4,16 +4,17 @@ import { parseOsm } from './osmParse.js';
 import { buildTile } from './meshBuilder.js';
 import { coverGrid, paintGround } from './groundPainter.js';
 import { createGridSampler, demoElevation, fetchTerrarium, sampleTerrarium } from './terrain.js';
-import { ownedLandmarks, ownedRoutes, placeFood } from './worldItems.js';
+import { ownedLandmarks, ownedRoutes, placeFood, placeLamps } from './worldItems.js';
 import { generateDemoCity } from './demoCity.js';
 import { bagId, fetchBagHeights, inNetherlands } from './bag3d.js';
 import { computeSeaMask, isSea } from './sea.js';
-import { BLOCK_ZOOM, TILE_ZOOM, lonLatToTile, tileBounds, tileRect } from './tiles.js';
+import { BLOCK_ZOOM, FAR_ZOOM, TILE_ZOOM, lonLatToTile, tileBounds, tileRect } from './tiles.js';
 
 /**
  * Builds map tiles off the main thread.
  *
  * In:  { type: 'origin', lat, lon, demo }        → { type: 'origin', elevation }
+ *      { type: 'far', id, x, y, origin, demo }   → { type: 'far', id, far }: low-detail distant terrain
  *      { type: 'block', id, x, y, origin, demo } → four × { type: 'tile', id, x, y, tile, partial }
  *                                                   then { type: 'blockDone', id, partial, error, measured }
  * A block is one BLOCK_ZOOM tile: its map data is downloaded once and split into 2×2 TILE_ZOOM tiles.
@@ -29,6 +30,9 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: 'origin', elevation: await originElevation(data) });
     } else if (data.type === 'block') {
       await loadBlock(data);
+    } else if (data.type === 'far') {
+      const far = await loadFarTile(data);
+      self.postMessage({ type: 'far', id: data.id, far }, collectTransferables(far));
     }
   } catch (error) {
     self.postMessage({ type: 'error', id: data.id, message: error.message ?? String(error) });
@@ -106,7 +110,47 @@ async function buildOne(x, y, features, projection, origin, demo) {
   tile.food = placeFood(features, rect, groundAt, sea ? (px, pz) => isSea(sea, rect, px, pz) : null);
   tile.landmarks = ownedLandmarks(features, rect, groundAt);
   tile.routes = ownedRoutes(features, rect);
+  tile.lamps = placeLamps(features, rect, groundAt);
   return tile;
+}
+
+const FAR_GRID = 48;
+
+/** Terrain-only tile for the distance: heights relative to the origin, coloured by height and slope. */
+async function loadFarTile({ x, y, origin, demo }) {
+  const projection = createProjection(origin.lat, origin.lon);
+  const rect = tileRect(x, y, projection, FAR_ZOOM);
+  const terrain = demo ? null : await fetchTerrarium(FAR_ZOOM, x, y);
+  const n = FAR_GRID + 1;
+  const absolute = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const px = rect.minX + ((rect.maxX - rect.minX) * i) / FAR_GRID;
+      const pz = rect.minZ + ((rect.maxZ - rect.minZ) * j) / FAR_GRID;
+      absolute[j * n + i] = demo ? demoElevation(px, pz) : terrain ? sampleTerrarium(terrain, i / FAR_GRID, j / FAR_GRID) : origin.elevation;
+    }
+  }
+
+  const heights = new Float32Array(n * n);
+  const colours = new Float32Array(n * n * 3);
+  const spacing = (rect.maxX - rect.minX) / FAR_GRID;
+  const at = (i, j) => absolute[Math.min(n - 1, Math.max(0, j)) * n + Math.min(n - 1, Math.max(0, i))];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const e = at(i, j);
+      const slope = Math.hypot(at(i + 1, j) - at(i - 1, j), at(i, j + 1) - at(i, j - 1)) / (2 * spacing);
+      // Deep water in the elevation data is sea (shallow negatives are polders); keep it flat at sea level.
+      const sea = e < -8;
+      heights[j * n + i] = (sea ? 0 : e) - origin.elevation;
+      const c = sea ? [0.03, 0.1, 0.16]
+        : e > 2600 ? [0.85, 0.87, 0.9]
+          : slope > 0.65 || e > 1900 ? [0.25, 0.23, 0.2]
+            : e > 400 ? [0.16, 0.2, 0.1]
+              : [0.2, 0.27, 0.12];
+      colours.set(c, (j * n + i) * 3);
+    }
+  }
+  return { rect: { minX: rect.minX, minZ: rect.minZ, maxX: rect.maxX, maxZ: rect.maxZ }, grid: FAR_GRID, heights, colours };
 }
 
 function collectTransferables(value, out = []) {

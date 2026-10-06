@@ -1,5 +1,5 @@
 // Bump when request formats change so stale cached responses aren't reused.
-const CACHE_NAME = 'fly-data-v4';
+const CACHE_NAME = 'fly-data-v5';
 
 /**
  * GETs JSON through the browser's Cache API: each URL is downloaded once, then served locally.
@@ -19,7 +19,7 @@ export async function fetchJsonCached(url, validate = () => {}) {
   return data;
 }
 
-const OLD_CACHES = ['osm-tiles-v1', 'osm-tiles-v2', 'fly-data-v3'];
+const OLD_CACHES = ['osm-tiles-v1', 'osm-tiles-v2', 'fly-data-v3', 'fly-data-v4'];
 let cleanedUp = false;
 
 async function openCache() {

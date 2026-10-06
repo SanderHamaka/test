@@ -15,7 +15,7 @@ const WATERWAY_WIDTHS = { river: 18, canal: 10, stream: 3, ditch: 1.5, drain: 1.
 const RAIL_WIDTHS = { rail: 4, narrow_gauge: 3, light_rail: 3.5, tram: 3, subway: 4 };
 
 export function parseOsm(elements, projection) {
-  const result = { buildings: [], areas: [], lines: [], trees: [], coastlines: [], foodSpots: [], landmarks: [] };
+  const result = { buildings: [], areas: [], lines: [], trees: [], coastlines: [], foodSpots: [], landmarks: [], lamps: [] };
 
   for (const el of elements) {
     const tags = el.tags ?? {};
@@ -30,6 +30,7 @@ export function parseOsm(elements, projection) {
 
     if (el.type === 'node') {
       if (tags.natural === 'tree') result.trees.push(...projection.toLocal(el.lat, el.lon));
+      else if (tags.highway === 'street_lamp') result.lamps.push(...projection.toLocal(el.lat, el.lon));
       continue;
     }
 

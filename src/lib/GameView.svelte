@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { Game, QUALITY } from '../game/Game.js';
+  import { WEATHER } from '../game/weather.js';
 
   let { place, demo = false, species, mode, progress, onexit, onalbum } = $props();
 
@@ -8,6 +9,7 @@
   let game;
   let hud = $state({ altitude: 0, speed: 0, bump: false, tiles: null, time: null, stamina: 1, hunger: null, compass: [] });
   let quality = $state(loadSetting('quality', 'high'));
+  let weather = $state(loadSetting('weather', 'real'));
   let hour = $state(12);
   let status = $state({ state: 'loading', message: 'Preparing…' });
   let paused = $state(false);
@@ -30,6 +32,7 @@
     game = new Game(canvas, place, {
       demo,
       quality,
+      weather,
       species,
       mode,
       progress,
@@ -91,6 +94,12 @@
     quality = value;
     game.setQuality(value);
     saveSetting('quality', value);
+  }
+
+  function setWeather(value) {
+    weather = value;
+    game.setWeatherMode(value);
+    saveSetting('weather', value);
   }
 
   function setVolume(value) {
@@ -174,6 +183,7 @@
       <span><b>{Math.round(hud.altitude)}</b> m</span>
       <span><b>{Math.round(hud.speed)}</b> km/h</span>
       {#if hud.time != null}<span title="Local solar time">{formatHour(hud.time)}</span>{/if}
+      {#if hud.weather}<span>{hud.weather}</span>{/if}
     </div>
     {#if hud.level}
       <div class="level" title="Experience">
@@ -305,6 +315,15 @@
           <input type="range" min="0" max="23.99" step="0.25" value={hour} oninput={(e) => setHour(+e.currentTarget.value)} />
         </label>
         <button class="link" onclick={resetTime}>Use the real time there now</button>
+        <label>
+          <span>Weather</span>
+          <select value={weather} onchange={(e) => setWeather(e.currentTarget.value)}>
+            <option value="real">Real weather there now</option>
+            {#each Object.entries(WEATHER) as [key, w] (key)}
+              <option value={key}>{w.label}</option>
+            {/each}
+          </select>
+        </label>
         <label>
           <span>Volume <b>{muted ? 'muted' : `${Math.round(volume * 100)}%`}</b></span>
           <input type="range" min="0" max="1" step="0.05" value={volume} oninput={(e) => setVolume(+e.currentTarget.value)} />

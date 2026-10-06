@@ -3,6 +3,8 @@
 export const TILE_ZOOM = 15;
 /** Map data is downloaded per block: one tile at this zoom covers 2×2 tiles at TILE_ZOOM. */
 export const BLOCK_ZOOM = TILE_ZOOM - 1;
+/** Low-detail terrain for the distance uses big tiles (about 6 km across in the Netherlands). */
+export const FAR_ZOOM = 12;
 
 export function lonLatToTile(lat, lon, z = TILE_ZOOM) {
   const n = 2 ** z;

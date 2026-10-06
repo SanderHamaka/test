@@ -16,6 +16,15 @@ export class SkyFog {
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.needsUpdate = true;
     this.uniform = { value: this.texture };
+    // Height fog: haze lies on the land. Things high above the ground under the camera (hills,
+    // mountains) only get a long-distance haze, so they stay visible far beyond the loaded tiles.
+    this.uniforms = {
+      skyFogMap: this.uniform,
+      fogBaseY: { value: 0 }, // ground level under the camera
+      fogHeightScale: { value: 160 }, // metres over which the low fog thins out
+      fogHazeFar: { value: 16000 }, // distance at which the long-distance haze is complete
+      fogHazeMax: { value: 0.85 },
+    };
   }
 
   /** Re-samples the horizon, e.g. after the sun has moved. */
@@ -33,12 +42,12 @@ export class SkyFog {
     const previousKey = material.customProgramCacheKey();
     material.onBeforeCompile = (shader, renderer) => {
       previous.call(material, shader, renderer);
-      shader.uniforms.skyFogMap = this.uniform;
+      Object.assign(shader.uniforms, this.uniforms);
       shader.vertexShader = shader.vertexShader
         .replace('#include <fog_pars_vertex>', '#include <fog_pars_vertex>\nvarying vec3 vSkyFogDir;')
         .replace('#include <fog_vertex>', '#include <fog_vertex>\nvSkyFogDir = (vec4(mvPosition.xyz, 0.0) * viewMatrix).xyz;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>\nvarying vec3 vSkyFogDir;\nuniform sampler2D skyFogMap;')
+        .replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>\nvarying vec3 vSkyFogDir;\nuniform sampler2D skyFogMap;\nuniform float fogBaseY;\nuniform float fogHeightScale;\nuniform float fogHazeFar;\nuniform float fogHazeMax;')
         .replace('#include <fog_fragment>', `
           #ifdef USE_FOG
             float skyFogU = atan(vSkyFogDir.x, vSkyFogDir.z) / (2.0 * PI) + 0.5;
@@ -48,7 +57,11 @@ export class SkyFog {
               skyFogColor = toneMapping(skyFogColor);
             #endif
             skyFogColor = linearToOutputTexel(vec4(skyFogColor, 1.0)).rgb;
-            float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+            float lowFog = smoothstep(fogNear, fogFar, vFogDepth);
+            float fragmentY = cameraPosition.y + vSkyFogDir.y;
+            float lift = exp(-max(0.0, fragmentY - fogBaseY) / fogHeightScale);
+            float haze = smoothstep(fogNear, fogHazeFar, length(vSkyFogDir)) * fogHazeMax;
+            float fogFactor = max(lowFog * lift, haze);
             gl_FragColor.rgb = mix(gl_FragColor.rgb, skyFogColor, fogFactor);
           #endif`);
     };

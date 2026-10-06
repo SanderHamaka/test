@@ -12,6 +12,10 @@ import { Nests } from './nests.js';
 import { Hawk } from './hawk.js';
 import { Challenges } from './challenges.js';
 import { Sound } from './sound.js';
+import { FarTerrain } from './farTerrain.js';
+import { Clouds } from './clouds.js';
+import { Rain } from './rain.js';
+import { WEATHER, WeatherState, fetchRealWeather } from './weather.js';
 import { Input } from './Input.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
@@ -42,7 +46,7 @@ export class Game {
    * @param onNotify  called with (text, kind) for messages to the player
    */
   constructor(canvas, place, {
-    demo = false, quality = 'high', species, mode = 'relaxed', progress,
+    demo = false, quality = 'high', weather = 'real', species, mode = 'relaxed', progress,
     onHud = () => {}, onStatus = () => {}, onNotify = () => {},
   } = {}) {
     this.canvas = canvas;
@@ -82,7 +86,13 @@ export class Game {
 
     this.lighting = new Lighting(this.renderer, this.scene, { lat: place.lat, lon: place.lon });
     this.lighting.setFogDistances(FOG_NEAR, FOG_FAR);
+    this.weather = new WeatherState('clear');
+    this.weatherRefresh = 0;
+    this.lighting.setWeather(this.weather.current, true);
     this.lighting.setTime(this.date);
+    this.clouds = new Clouds(this.scene);
+    this.rain = new Rain(this.scene);
+    this.setWeatherMode(weather);
 
     this.prepareMaterial = (material) => {
       this.lighting.skyFog.apply(material);
@@ -131,6 +141,9 @@ export class Game {
       onChange: () => this.reportTileStatus(),
     });
 
+    this.far = new FarTerrain(this.scene, this.prepareMaterial, {
+      origin: { lat: place.lat, lon: place.lon, elevation }, demo, holeRadius: LOAD_DISTANCE - 100,
+    });
     this.nests = new Nests(this.scene, this.prepareMaterial, this.progress, this.tiles.projection, elevation);
     this.challenges = new Challenges(this.scene, this.prepareMaterial, {
       tiles: this.tiles, nests: this.nests, discoveries: this.discoveries, species: this.bird.species,
@@ -260,17 +273,21 @@ export class Game {
   frame(time) {
     this.timer.update(time);
     const dt = Math.min(this.timer.getDelta(), 1 / 20);
+    const focus = this.ready ? this.bird.position : this.spawnPoint ?? new THREE.Vector3(0, 0, 60);
 
-    if (this.tiles) this.tiles.update(this.ready ? this.bird.position : { x: 0, z: 60 }, this.paused ? 0 : dt);
+    if (this.tiles) this.tiles.update(focus, this.paused ? 0 : dt);
+    this.far?.update(focus);
 
     if (this.ready && !this.paused) {
       this.date = new Date(this.date.getTime() + dt * 1000);
+      this.updateWeather(dt);
       this.lighting.setTime(this.date);
       this.simulate(dt, this.input.state);
       this.placeCamera(false, dt);
       this.reportHud(dt);
     }
     this.lighting.follow(this.bird.position, this.camera.position);
+    this.updateAtmosphere(this.paused ? 0 : dt);
     if (this.ready) this.updateSound(this.paused ? 0 : dt);
 
     if (this.composer) {
@@ -284,6 +301,66 @@ export class Game {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  // ---- Weather ----
+
+  /** 'real' fetches the current weather at the place; otherwise a preset name from WEATHER. */
+  setWeatherMode(mode) {
+    this.weatherMode = mode;
+    if (mode !== 'real') {
+      this.weather.set(WEATHER[mode] ? mode : 'clear');
+      return;
+    }
+    fetchRealWeather(this.place.lat, this.place.lon).then((real) => {
+      if (this.disposed || this.weatherMode !== 'real') return;
+      if (real) {
+        this.weather.set(real.preset, real.wind);
+        this.realWeather = real;
+      } else {
+        this.weather.set('clear');
+      }
+    });
+  }
+
+  updateWeather(dt) {
+    const changing = this.weather.update(dt);
+    // Re-render reflections and the horizon fog colour every couple of seconds while the weather changes.
+    this.weatherRefresh -= dt;
+    const refresh = changing && this.weatherRefresh <= 0;
+    if (refresh) this.weatherRefresh = 2;
+    this.lighting.setWeather(this.weather.current, refresh);
+    this.lighting.tick(dt, this.weather.wind.speed);
+    const wind = this.weather.windVector();
+    this.bird.wind = wind;
+  }
+
+  /** Fog (weather, height fog, inside clouds), clouds, rain and street lights; runs every frame. */
+  updateAtmosphere(dt) {
+    const w = this.weather.current;
+    const night = this.lighting.uniforms.night.value;
+    const lerp = THREE.MathUtils.lerp;
+
+    if (this.ready) {
+      const key = this.lighting.key, sky = this.lighting.hemisphere;
+      const lit = key.color.clone().multiplyScalar(key.intensity * 0.6).add(sky.color.clone().multiplyScalar(sky.intensity * 1.4));
+      const shade = sky.color.clone().multiplyScalar(sky.intensity * 1.1 + 0.02).lerp(new THREE.Color(0.3, 0.32, 0.36), w.overcast * 0.4 * (1 - night));
+      this.clouds.update(dt, this.bird.position, w.cloud, { lit, shade });
+    }
+
+    // Inside a cloud bank the world turns white.
+    const inside = this.clouds.insideAmount;
+    const near = lerp(lerp(FOG_NEAR, 70, w.fog), 4, inside);
+    const far = lerp(lerp(FOG_FAR, 520, w.fog), 55, inside);
+    this.lighting.setFogDistances(near, far);
+    const fog = this.lighting.skyFog.uniforms;
+    fog.fogHeightScale.value = lerp(160, 700, Math.max(w.fog, inside));
+    fog.fogHazeMax.value = lerp(0.85, 1, Math.max(w.fog, inside));
+    fog.fogHazeFar.value = lerp(16000, 2500, Math.max(w.fog * 0.8, inside));
+    if (this.tiles) fog.fogBaseY.value = this.tiles.groundAt(this.camera.position.x, this.camera.position.z);
+
+    this.rain.update(dt, this.camera, w.rain, this.weather.windVector(), lerp(1, 0.25, night));
+    this.tiles?.resources.setNight(night);
   }
 
   updateSound(dt) {
@@ -307,6 +384,7 @@ export class Game {
       height: p.y - this.tiles.groundAt(p.x, p.z),
       surroundings: this.surroundings,
       night: this.lighting.uniforms.night.value,
+      rain: this.weather.current.rain,
     });
   }
 
@@ -450,6 +528,7 @@ export class Game {
       bump: !!this.hudFlags.bump,
       tiles: this.tiles.status,
       time: this.solarHour,
+      weather: WEATHER[this.weather.preset]?.label,
       stamina: this.bird.stamina / this.bird.maxStamina,
       hunger: this.gameplay.challenge ? this.gameplay.hunger / 100 : null,
       state: this.bird.state,
@@ -478,6 +557,9 @@ export class Game {
     this.nests?.dispose();
     this.challenges?.dispose();
     this.hawk?.dispose();
+    this.far?.dispose();
+    this.clouds.dispose();
+    this.rain.dispose();
     this.sound.dispose();
     this.progress.flush();
     this.disposeComposer();

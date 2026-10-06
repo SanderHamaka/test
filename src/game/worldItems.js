@@ -113,3 +113,42 @@ export function ownedRoutes(features, rect) {
     .filter((l) => l.points[0] >= rect.minX && l.points[0] < rect.maxX && l.points[1] >= rect.minZ && l.points[1] < rect.maxZ)
     .map((l) => ({ id: l.id, kind: l.kind, points: new Float32Array(l.points) }));
 }
+
+const LIT_ROADS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'pedestrian', 'trunk']);
+const LAMP_SPACING = 34;
+const MAX_LAMPS_PER_TILE = 1500;
+
+/**
+ * Street lamps owned by a tile, as a Float32Array of [x, groundY, z]. Mapped lamps (highway=street_lamp)
+ * are used where a tile has a reasonable number of them; otherwise lamps are placed along both sides of
+ * lit roads, staggered, a little off the carriageway.
+ */
+export function placeLamps(features, rect, groundAt) {
+  const inRect = (x, z) => x >= rect.minX && x < rect.maxX && z >= rect.minZ && z < rect.maxZ;
+  const out = [];
+  const add = (x, z) => {
+    if (out.length / 3 < MAX_LAMPS_PER_TILE && inRect(x, z)) out.push(x, groundAt(x, z), z);
+  };
+  for (let i = 0; i < features.lamps.length; i += 2) add(features.lamps[i], features.lamps[i + 1]);
+  if (out.length / 3 >= 10) return new Float32Array(out);
+
+  out.length = 0;
+  for (const line of features.lines) {
+    if (line.kind !== 'road' || line.bridge || !LIT_ROADS.has(line.type)) continue;
+    const p = line.points;
+    const offset = line.width / 2 + 1.6;
+    let carry = LAMP_SPACING / 2, side = 1;
+    for (let i = 0; i < p.length - 2; i += 2) {
+      const dx = p[i + 2] - p[i], dz = p[i + 3] - p[i + 1];
+      const len = Math.hypot(dx, dz);
+      if (len < 0.1) continue;
+      const nx = -dz / len, nz = dx / len;
+      for (let d = carry; d < len; d += LAMP_SPACING) {
+        add(p[i] + (dx * d) / len + nx * offset * side, p[i + 1] + (dz * d) / len + nz * offset * side);
+        side = -side;
+      }
+      carry = ((carry - len) % LAMP_SPACING + LAMP_SPACING) % LAMP_SPACING;
+    }
+  }
+  return new Float32Array(out);
+}

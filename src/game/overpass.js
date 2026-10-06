@@ -35,6 +35,7 @@ export function buildQuery({ south, west, north, east }) {
   nwr["name"]["railway"="station"];
   nwr["name"]["leisure"="stadium"];
   node["natural"="tree"];
+  node["highway"="street_lamp"];
 );
 out geom qt;`;
 }

@@ -49,6 +49,7 @@ export class Sound {
     this.rumble = this.loop(this.brown, 'lowpass', 180, 0.7);
     this.city = this.loop(this.brown, 'lowpass', 320, 0.5);
     this.waves = this.loop(this.brown, 'lowpass', 900, 0.4);
+    this.rain = this.loop(this.noise, 'highpass', 1600, 0.4);
     this.wavePhase = 0;
   }
 
@@ -90,7 +91,7 @@ export class Sound {
   /**
    * Called every frame.
    * @param s { speed m/s, flapping, beat (a wing beat started this frame), diving, perched, height above
-   *            ground in m, surroundings { water, green, built, trees }, night 0..1 }
+   *            ground in m, surroundings { water, green, built, trees }, night 0..1, rain 0..1 }
    */
   update(dt, s) {
     const ctx = this.ctx;
@@ -111,6 +112,8 @@ export class Sound {
     this.wavePhase += dt * 0.9;
     const swell = 0.55 + 0.45 * Math.sin(this.wavePhase) * Math.sin(this.wavePhase * 0.37 + 1);
     set(this.waves.gain.gain, 0.22 * env.water * near * swell, 0.3);
+
+    set(this.rain.gain.gain, 0.2 * (s.rain ?? 0), 0.8);
 
     if (s.beat) this.wingBeat(s.perched ? 0.3 : 1);
 

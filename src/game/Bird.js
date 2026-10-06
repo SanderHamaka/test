@@ -41,6 +41,7 @@ export class Bird {
     this.canFlap = true; // false when starving in challenge mode
     this.flapping = false;
     this.touchGrace = 0; // seconds after take-off during which touching a surface doesn't land
+    this.wind = { x: 0, z: 0 }; // m/s; set from the weather
     this.anim = { phase: 0, flap: 0, tuck: 0, perch: 0, headTurn: 0, tailSpread: 0 };
   }
 
@@ -131,6 +132,9 @@ export class Bird {
 
     this.updateForward();
     this.position.addScaledVector(this.forward, this.speed * dt);
+    // The wind carries the bird a little (birds fly in the moving air, not over the ground).
+    this.position.x += this.wind.x * 0.35 * dt;
+    this.position.z += this.wind.z * 0.35 * dt;
 
     // Gliding slowly loses height (less when fast); flapping gains it.
     const sink = this.flapping ? -s.lift : s.sink * 1.4 * (1 - Math.min(this.speed / 35, 0.7));

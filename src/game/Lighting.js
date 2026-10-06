@@ -22,7 +22,8 @@ export class Lighting {
     this.scene = scene;
     this.lat = lat;
     this.lon = lon;
-    this.uniforms = { night: { value: 0 } };
+    this.uniforms = { night: { value: 0 }, wet: { value: 0 } };
+    this.weather = { cloud: 0.12, overcast: 0, rain: 0, fog: 0 };
     this.direction = new THREE.Vector3(0, 1, 0);
     this.applied = null;
 
@@ -75,6 +76,23 @@ export class Lighting {
     this.scene.fog.far = far;
   }
 
+  /**
+   * Applies weather (see weather.js) to the sky and light. Call setTime afterwards; pass refresh to
+   * re-render reflections and the horizon fog colour even if the sun hasn't moved.
+   */
+  setWeather(w, refresh) {
+    this.weather = { ...w };
+    for (const sky of [this.sky, this.envSky]) {
+      const u = sky.material.uniforms;
+      u.cloudCoverage.value = w.cloud;
+      u.cloudDensity.value = 0.4 + 0.5 * w.overcast;
+      u.turbidity.value = 4 + 7 * w.overcast + 4 * w.fog;
+      u.rayleigh.value = 1.4 - 0.9 * w.overcast;
+    }
+    this.uniforms.wet.value = w.rain;
+    if (refresh) this.applied = null;
+  }
+
   /** Updates everything for a moment in time. Expensive parts only re-run when the sun has moved. */
   setTime(date) {
     const sun = sunPosition(date, this.lat, this.lon);
@@ -94,14 +112,16 @@ export class Lighting {
     if (sunDir.y > -0.03) {
       this.direction.copy(sunDir).setY(Math.max(sunDir.y, 0.02)).normalize();
       this.key.color.copy(LOW_SUN).lerp(DAY_SUN, smoothstep(0.02, 0.35, sunDir.y));
-      this.key.intensity = 3.4 * day;
+      this.key.intensity = 3.4 * day * (1 - 0.78 * this.weather.overcast);
     } else {
       this.direction.set(-sunDir.x, 0, -sunDir.z).normalize().multiplyScalar(0.8).setY(0.6).normalize();
       this.key.color.copy(MOON);
-      this.key.intensity = 0.55 * night;
+      this.key.intensity = 0.55 * night * (1 - 0.7 * this.weather.overcast);
     }
+    // Overcast: soft, shadowless light from the whole sky.
+    this.key.shadow.intensity = 1 - 0.85 * this.weather.overcast;
 
-    this.hemisphere.intensity = THREE.MathUtils.lerp(0.06, 0.3, day);
+    this.hemisphere.intensity = THREE.MathUtils.lerp(0.06, 0.3 + 0.55 * this.weather.overcast, day);
     this.hemisphere.color.set(day > 0.5 ? 0xcfe0f5 : 0x6d7fa8);
     this.renderer.toneMappingExposure = THREE.MathUtils.lerp(0.5, 0.9, night);
 
@@ -120,6 +140,11 @@ export class Lighting {
       if (this.skyFog) this.skyFog.update(this.renderer, this.sky);
       else this.skyFog = new SkyFog(this.renderer, this.sky);
     }
+  }
+
+  /** Lets the sky's clouds drift; faster in stronger wind. */
+  tick(dt, windSpeed) {
+    this.sky.material.uniforms.time.value += dt * (0.4 + windSpeed / 8);
   }
 
   /** Keeps the shadow map centred on a point, snapped to whole texels so shadows don't shimmer. */
