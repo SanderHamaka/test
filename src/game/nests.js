@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createBranchGeometry } from './birdModel.js';
+import { buildNestGeometry } from './nestModel.js';
 
 const MERGE_RADIUS = 2; // a branch dropped this close to a nest is added to it
 const VISIBLE_DISTANCE = 6000;
@@ -12,6 +13,20 @@ export const NEST_MILESTONES = [
   { branches: 30, name: 'Grand nest', xp: 100, text: 'A grand nest, visible from three roofs away.' },
   { branches: 60, name: 'Legendary nest', xp: 200, text: 'A legendary nest. Storks come to take notes.' },
 ];
+
+/** Which model a nest shows: loose twigs until it's finished, then ever bigger nests. */
+export const NEST_STAGES = [
+  { branches: 5, size: 'small' },
+  { branches: 15, size: 'large' },
+  { branches: 30, size: 'huge' },
+  { branches: 60, size: 'legendary' },
+];
+
+const stageOf = (branches) => NEST_STAGES.findLast((s) => branches >= s.branches)?.size ?? null;
+
+const POP_SECONDS = 0.7;
+// Overshoots a little, then settles: the nest "puffs up" into its new size.
+const easeOutBack = (t) => 1 + 2.7 * (t - 1) ** 3 + 1.7 * (t - 1) ** 2;
 
 const hash = (i, salt) => {
   const s = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
@@ -34,8 +49,10 @@ export class Nests {
     this.originElevation = originElevation;
     this.geometry = createBranchGeometry(1.2);
     this.material = prepareMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
-    this.meshes = new Map(); // nest id → InstancedMesh
-    for (const nest of progress.nests) this.refresh(nest);
+    this.meshes = new Map(); // nest id → InstancedMesh of loose twigs (before a nest is finished)
+    this.models = new Map(); // nest id → { mesh, size, pop }
+    this.geometries = new Map(); // size → shared nest geometry
+    for (const nest of progress.nests) this.refresh(nest, false);
   }
 
   /** A nest's position in this world's local coordinates. */
@@ -78,12 +95,53 @@ export class Nests {
     return best;
   }
 
-  /** (Re)builds a nest's branches. Each branch's place depends only on its own index, so nests grow
-   *  without existing branches moving: a spiral outwards and upwards forms the bowl. */
-  refresh(nest) {
+  /** Shows a nest: loose twigs until it's finished, then the model for its size (popping into place when it grows). */
+  refresh(nest, animate = true) {
     const position = this.localPosition(nest);
     if (Math.hypot(position.x, position.z) > VISIBLE_DISTANCE) return;
+    const size = stageOf(nest.branches);
+    if (!size) {
+      this.refreshTwigs(nest, position);
+      return;
+    }
 
+    // Finished: the loose twigs make way for a real nest.
+    const twigs = this.meshes.get(nest.id);
+    if (twigs) {
+      twigs.removeFromParent();
+      twigs.dispose();
+      this.meshes.delete(nest.id);
+    }
+    let model = this.models.get(nest.id);
+    if (model?.size === size) return;
+    if (!this.geometries.has(size)) this.geometries.set(size, buildNestGeometry(size));
+    if (!model) {
+      const mesh = new THREE.Mesh(this.geometries.get(size), this.material);
+      mesh.castShadow = mesh.receiveShadow = true;
+      mesh.position.copy(position);
+      mesh.rotation.y = hash(1, nest.lat * 1000 + nest.lon) * Math.PI * 2; // each nest turned its own way
+      this.scene.add(mesh);
+      model = { mesh, size, pop: 0 };
+      this.models.set(nest.id, model);
+    }
+    model.mesh.geometry = this.geometries.get(size);
+    model.size = size;
+    model.pop = animate ? POP_SECONDS : 0;
+    model.mesh.scale.setScalar(animate ? 0.6 : 1);
+  }
+
+  /** Grow animation for nests that just changed size. */
+  update(dt) {
+    for (const model of this.models.values()) {
+      if (model.pop <= 0) continue;
+      model.pop = Math.max(0, model.pop - dt);
+      model.mesh.scale.setScalar(0.6 + 0.4 * easeOutBack(1 - model.pop / POP_SECONDS));
+    }
+  }
+
+  /** Loose twigs for an unfinished nest. Each twig's place depends only on its own index, so the pile
+   *  grows without existing twigs moving. */
+  refreshTwigs(nest, position) {
     let mesh = this.meshes.get(nest.id);
     if (!mesh || mesh.instanceMatrix.count < nest.branches) {
       mesh?.removeFromParent();
@@ -121,6 +179,8 @@ export class Nests {
       mesh.removeFromParent();
       mesh.dispose();
     }
+    for (const { mesh } of this.models.values()) mesh.removeFromParent();
+    for (const geometry of this.geometries.values()) geometry.dispose();
     this.geometry.dispose();
     this.material.dispose();
   }

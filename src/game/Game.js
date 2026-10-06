@@ -337,6 +337,7 @@ export class Game {
     if (this.paused) this.input.pollGamepad(); // so Start can unpause
     this.trackFrameRate(frameTime);
     this.far?.update(focus);
+    this.nests?.update(dt);
 
     if (this.ready && !this.paused) {
       this.date = new Date(Date.now() + this.timeOffset);

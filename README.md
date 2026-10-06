@@ -99,7 +99,10 @@ invite panel.
 waves near water, birdsong near trees by day, crickets at night, and effects for everything you do.
 
 **Nests.** Fly through a tree to snap off a branch, then land anywhere to drop it. Branches dropped within
-2 m of each other grow into one nest, spiralling outwards and upwards. At 5 branches the nest becomes your
+2 m of each other grow into one nest. The first few lie as loose twigs; at 5 branches they become a small woven
+nest with a straw lining and two eggs, at 15 a large one, at 30 a huge one on a platform of packed twigs, and at
+60 a legendary nest with a crow's hoard of shiny things (`nestModel.js`). Each new size pops into place. At 5
+branches the nest becomes your
 **home**: you start perched on it whenever you play nearby, it's on the compass, and in challenge mode you
 wake up there after fainting. Bigger nests (15, 30, 60 branches) earn bonus XP. Nests are saved by their
 real coordinates, so they stay where you built them.
