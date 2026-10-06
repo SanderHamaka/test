@@ -3,6 +3,8 @@ import { Colliders } from './Colliders.js';
 import { createGridSampler } from './terrain.js';
 import { WATER_COLOUR } from './groundPainter.js';
 
+const TREE_CELL = 12;
+
 /** Materials and geometries shared by every tile, created once per game. */
 export class TileResources {
   /** @param uniforms shared uniforms, e.g. { night } from Lighting */
@@ -78,6 +80,36 @@ export class Tile {
     }
 
     if (data.trees.length) this.addTrees(data.trees, resources);
+    this.indexTrees(data.trees, data.center);
+  }
+
+  /** Spatial grid of tree crowns (world coordinates) for "is the bird flying through a tree?" checks. */
+  indexTrees(data, [cx, cz]) {
+    this.crowns = [];
+    this.crownGrid = new Map();
+    for (let i = 0; i < data.length; i += 5) {
+      const s = data[i + 3];
+      const crown = { x: data[i] + cx, y: data[i + 1] + 4.4 * s, z: data[i + 2] + cz, r: 2.4 * s, h: 2.7 * s };
+      this.crowns.push(crown);
+      const key = `${Math.floor(crown.x / TREE_CELL)},${Math.floor(crown.z / TREE_CELL)}`;
+      if (!this.crownGrid.has(key)) this.crownGrid.set(key, []);
+      this.crownGrid.get(key).push(crown);
+    }
+  }
+
+  /** The tree crown containing a point, or null. */
+  treeAt(x, y, z) {
+    const gx = Math.floor(x / TREE_CELL), gz = Math.floor(z / TREE_CELL);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (const c of this.crownGrid.get(`${gx + dx},${gz + dz}`) ?? []) {
+          const horizontal = Math.hypot(x - c.x, z - c.z) / c.r;
+          const vertical = (y - c.y) / c.h;
+          if (horizontal * horizontal + vertical * vertical < 1) return c;
+        }
+      }
+    }
+    return null;
   }
 
   own(item) {

@@ -21,6 +21,8 @@ export class Progress {
     this.xp = saved.xp ?? 0;
     this.discovered = new Set(saved.discovered ?? []);
     this.eaten = saved.eaten ?? {};
+    this.nests = saved.nests ?? []; // [{ id, lat, lon, elevation, branches }]
+    this.hints = new Set(saved.hints ?? []); // one-time tips already shown
     this.lastSpecies = saved.lastSpecies ?? 'gull';
     this.lastMode = saved.lastMode ?? 'relaxed';
     this.saveTimer = null;
@@ -72,6 +74,14 @@ export class Progress {
     this.save();
   }
 
+  /** True the first time a tip is asked for, so it's only ever shown once. */
+  firstTime(hint) {
+    if (this.hints.has(hint)) return false;
+    this.hints.add(hint);
+    this.save();
+    return true;
+  }
+
   setChoice(speciesId, mode) {
     this.lastSpecies = speciesId;
     this.lastMode = mode;
@@ -90,6 +100,8 @@ export class Progress {
         xp: this.xp,
         discovered: [...this.discovered],
         eaten: this.eaten,
+        nests: this.nests,
+        hints: [...this.hints],
         lastSpecies: this.lastSpecies,
         lastMode: this.lastMode,
       }));

@@ -28,7 +28,7 @@ export class Discoveries {
     }
     geometry.setAttribute('color', new THREE.BufferAttribute(fade, 3));
     this.beams = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending,
+      vertexColors: true, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending,
       depthWrite: false, side: THREE.DoubleSide, fog: false,
     }), MAX_BEAMS);
     this.beams.count = 0;

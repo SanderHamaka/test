@@ -52,7 +52,7 @@
     if (notes.some((n) => n.text === text)) return;
     const id = ++noteId;
     notes = [...notes.slice(-3), { id, text, kind }];
-    setTimeout(() => (notes = notes.filter((n) => n.id !== id)), kind === 'hint' ? 2000 : 4500);
+    setTimeout(() => (notes = notes.filter((n) => n.id !== id)), { hint: 2000, 'hint-long': 7000 }[kind] ?? 4500);
   }
 
   function loadSetting(key, fallback) {
@@ -141,7 +141,7 @@
         {/if}
       {/each}
       {#each hud.compass as mark, i (mark.id)}
-        <span class="mark" class:nearest={i === 0} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
+        <span class="mark" class:home={mark.home} class:nearest={i === 0 || (i === 1 && hud.compass[0].home)} class:edge={Math.abs(mark.relative) > Math.PI / 2} style="left: {compassX(mark.relative)}%">
           <i></i>
           <small>{mark.name}<br />{formatDistance(mark.distance)}</small>
         </span>
@@ -165,6 +165,9 @@
 
   {#if status.state === 'ready'}
     <div class="meters">
+      {#if hud.carrying}
+        <div class="prompt">Carrying a branch · land to drop it (within 2 m of a nest to add to it)</div>
+      {/if}
       {#if hud.state === 'perched'}
         <div class="prompt">Resting · <kbd>Space</kbd> or <kbd>W</kbd> to take off · <kbd>A</kbd><kbd>D</kbd> to turn</div>
       {:else if hud.canLand}
@@ -199,6 +202,7 @@
       <div><kbd>Space</kbd> flap &nbsp; <kbd>Shift</kbd> dive &nbsp; <kbd>E</kbd> land</div>
       <div>Come down onto a roof (or press <kbd>E</kbd>) to land</div>
       <div>Fly through food to eat · follow the compass to discover places</div>
+      <div>Fly through a tree for a branch, then land to build a nest</div>
       <div><kbd>[</kbd><kbd>]</kbd> time of day · scroll to zoom</div>
       <div><kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>
     </div>
@@ -388,6 +392,13 @@
 
   .mark.nearest small {
     opacity: 1;
+  }
+
+  .mark.home i {
+    border-radius: 2px;
+    background: #8fd16a;
+    box-shadow: 0 0 8px #8fd16a;
+    transform: rotate(45deg);
   }
 
   .mark.edge i {

@@ -44,6 +44,15 @@ export class Bird {
     this.anim = { phase: 0, flap: 0, tuck: 0, perch: 0, headTurn: 0, tailSpread: 0 };
   }
 
+  /** Whether a nest branch is in the beak. */
+  get carrying() {
+    return this.rig.twig.visible;
+  }
+
+  set carrying(value) {
+    this.rig.twig.visible = value;
+  }
+
   get maxStamina() {
     return this.stats.stamina;
   }

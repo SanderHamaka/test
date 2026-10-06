@@ -1,8 +1,10 @@
 import { FOOD_LABELS } from './species.js';
+import { NEST_MILESTONES } from './nests.js';
 
 const DISCOVERY_XP = 60;
 const HUNGER_DRAIN = 100 / (8 * 60); // a full stomach lasts about eight minutes of gliding
 const FAINT_PENALTY = 0.25;
+const BRANCH_XP = 4;
 
 /**
  * Game rules on top of flying: rewards for eating and discovering, and in challenge mode hunger.
@@ -56,6 +58,29 @@ export class Gameplay {
     const taste = value >= 1.5 ? 'Delicious ' : value < 0.6 ? 'Meh, ' : '';
     this.notify(`${taste}${FOOD_LABELS[type]} +${xp} XP`, 'food');
     this.reward(xp);
+  }
+
+  pickedBranch() {
+    if (this.progress.firstTime('branch')) {
+      this.notify('You snapped off a branch! Land anywhere to drop it and start a nest.', 'hint-long');
+    } else {
+      this.notify('Picked up a branch', 'hint');
+    }
+  }
+
+  placedBranch({ nest, created, milestone }) {
+    if (milestone) {
+      this.notify(`${milestone.name}: ${milestone.text} +${milestone.xp} XP`, 'level');
+      this.reward(milestone.xp + BRANCH_XP);
+      return;
+    }
+    if (created) {
+      this.notify('You started a nest! Bring 4 more branches to make it your home.', 'discovery');
+    } else {
+      const next = NEST_MILESTONES.map((m) => m.branches).find((n) => n > nest.branches);
+      this.notify(`Nest: ${nest.branches} branches${next ? ` · ${next - nest.branches} to the next size` : ''} +${BRANCH_XP} XP`, 'food');
+    }
+    this.reward(BRANCH_XP);
   }
 
   reward(xp) {

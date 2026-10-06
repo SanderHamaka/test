@@ -25,12 +25,12 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | `Space` (hold) | Flap: thrust and lift |
 | `Shift` (hold) | Dive: tuck wings, fast descent |
 | `E` | Land on the roof or ground below you; `Space` or `W` takes off again |
-
-You also land by simply coming down onto a roof or the ground nose-first (or slowly), or by clipping the
-top of a wall. Flying level over a roof skims it instead.
 | Mouse wheel | Camera distance |
 | `[` `]` | Time of day −/+ 30 minutes |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
+
+You also land by simply coming down onto a roof or the ground nose-first (or slowly), or by clipping the
+top of a wall. Flying level over a roof skims it instead.
 
 ## Playing
 
@@ -46,6 +46,12 @@ Food comes from the real map: fish over water, insects over parks, seeds on fiel
 by snack bars, cafés and markets, mice in grassland. Fly through it to eat. Named landmarks (churches,
 towers, museums, stations, windmills…) show on the compass and under a faint beam of light; fly close to
 discover them. XP from food and discoveries raises your level. Progress is saved in the browser.
+
+**Nests.** Fly through a tree to snap off a branch, then land anywhere to drop it. Branches dropped within
+2 m of each other grow into one nest, spiralling outwards and upwards. At 5 branches the nest becomes your
+**home**: you start perched on it whenever you play nearby, it's on the compass, and in challenge mode you
+wake up there after fainting. Bigger nests (15, 30, 60 branches) earn bonus XP. Nests are saved by their
+real coordinates, so they stay where you built them.
 
 ## How it works
 
@@ -94,8 +100,9 @@ discover them. XP from food and discoveries raises your level. Progress is saved
    and can skim across rooftops.
 6. **Birds** (`species.js`, `birdModel.js`, `portraits.js`): species definitions and procedural models with
    jointed wings, tail, head and legs, painted per species; the album portraits are rendered from them.
-7. **Game** (`gameplay.js`, `food.js`, `discoveries.js`, `progress.js`): food placed per tile from the map
-   (`worldItems.js`), landmark discovery with compass and beams, rewards, hunger, levels and saving.
+7. **Game** (`gameplay.js`, `food.js`, `discoveries.js`, `nests.js`, `progress.js`): food placed per tile from
+   the map (`worldItems.js`), landmark discovery with compass and beams, nest building from tree branches,
+   rewards, hunger, levels and saving.
 
 In development (`npm run dev`) the game is exposed as `window.__game` for poking at it from the console.
 
@@ -117,6 +124,6 @@ a commercial or self-hosted tile provider.
       Netherlands, window styles, ambient occlusion and bloom, day/night cycle with lit windows and stars.
 - [ ] **Later visuals.** Distant low-detail terrain, street lights, weather and clouds, WebGPU renderer.
 - [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
-      landmark discovery, XP and levels, challenge mode.
+      landmark discovery, XP and levels, challenge mode, touchdown landings, nest building and a home.
 - [ ] **Phase 4b.** Predators (hawk), optional challenges (races, deliveries), sound.
 - [ ] **Phase 5: polish.** Touch and gamepad controls, settings, saving progress.

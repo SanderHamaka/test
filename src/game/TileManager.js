@@ -197,6 +197,11 @@ export class TileManager {
     return top;
   }
 
+  /** The tree crown containing a point, or null. */
+  treeAt(x, y, z) {
+    return this.entryAt(x, z)?.tile.treeAt(x, y, z) ?? null;
+  }
+
   /** Calls fn(bottom, top, colliders, index) for each building whose footprint contains (x, z). */
   forEachBuildingAt(x, z, fn) {
     for (const { tile } of this.tiles.values()) {

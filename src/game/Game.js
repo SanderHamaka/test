@@ -8,6 +8,7 @@ import { Bird, LAND_RANGE } from './Bird.js';
 import { FoodManager } from './food.js';
 import { Discoveries } from './discoveries.js';
 import { Gameplay } from './gameplay.js';
+import { Nests } from './nests.js';
 import { Input } from './Input.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
@@ -45,6 +46,7 @@ export class Game {
     this.place = place;
     this.onHud = onHud;
     this.onStatus = onStatus;
+    this.onNotify = onNotify;
     this.progress = progress;
     this.paused = false;
     this.ready = false;
@@ -115,11 +117,15 @@ export class Game {
       onChange: () => this.reportTileStatus(),
     });
 
-    const spawnPoint = new THREE.Vector3(0, 0, 60);
-    this.spawnPoint = spawnPoint;
-    await this.tiles.whenReady(spawnPoint);
+    this.nests = new Nests(this.scene, this.prepareMaterial, this.progress, this.tiles.projection, elevation);
+
+    // Start at your nest if you have one near this place, otherwise above the place itself.
+    this.spawnPoint = new THREE.Vector3(0, 0, 60);
+    const home = this.nests.homeNear(this.spawnPoint);
+    await this.tiles.whenReady(home?.position ?? this.spawnPoint);
     if (this.disposed) return;
-    this.spawn(spawnPoint);
+    this.respawn();
+    if (home) this.onNotify(`Welcome home to your nest (${home.nest.branches} branches).`, 'discovery');
     this.ready = true;
     this.onStatus({ state: 'ready' });
   }
@@ -131,6 +137,21 @@ export class Game {
       state: 'loading',
       message: error ? `Map server busy, retrying… (${error})` : 'Downloading map data from OpenStreetMap…',
     });
+  }
+
+  /** Back to your home nest (perched on it) if there is one nearby, else above the starting point. */
+  respawn() {
+    this.bird.carrying = false;
+    const home = this.nests.homeNear(this.bird.model.visible ? this.bird.position : this.spawnPoint);
+    if (!home) {
+      this.spawn(this.spawnPoint);
+      return;
+    }
+    const p = home.position;
+    this.bird.spawn(p.x, p.y + this.bird.rig.standHeight + 0.3, p.z, 0);
+    this.bird.state = 'perched';
+    this.bird.model.visible = true;
+    this.placeCamera(true);
   }
 
   /** Start above the tallest building near the spawn point, facing north. */
@@ -249,14 +270,42 @@ export class Game {
   simulate(dt, input) {
     this.elapsed = (this.elapsed ?? 0) + dt;
     const events = this.bird.update(dt, input, this.tiles);
+    this.buildNest(events);
     this.food.sync(this.tiles);
     this.discoveries.sync(this.tiles);
     const eaten = this.food.update(this.elapsed, this.bird);
     const found = this.discoveries.update(dt, this.bird);
-    if (this.gameplay.update(dt, events, eaten, found).faint) this.spawn(this.spawnPoint);
+    if (this.gameplay.update(dt, events, eaten, found).faint) this.respawn();
     if (events.bump) this.shake = 1;
     if (events.hardLanding) this.shake = 0.5;
     Object.assign(this.hudFlags, events);
+  }
+
+  /** Flying through a tree snaps off a branch; landing with one drops it into (or starts) a nest. */
+  buildNest(events) {
+    const bird = this.bird;
+    const p = bird.position;
+    if (bird.state === 'flying' && !bird.carrying && this.tiles.treeAt(p.x, p.y, p.z)) {
+      bird.carrying = true;
+      this.gameplay.pickedBranch();
+    }
+    if (events.landed && bird.carrying) {
+      bird.carrying = false;
+      this.gameplay.placedBranch(this.nests.addBranch(p.x, p.y - bird.rig.standHeight, p.z));
+    }
+  }
+
+  /** Compass entry for the home nest, if there is one within range. */
+  homeMark() {
+    const home = this.nests.homeNear(this.bird.position, 5000);
+    if (!home) return null;
+    const dx = home.position.x - this.bird.position.x, dz = home.position.z - this.bird.position.z;
+    const heading = Math.atan2(-dx, -dz);
+    return {
+      id: 'home', name: 'Your nest', kind: 'Home', home: true,
+      distance: Math.hypot(dx, dz),
+      relative: Math.atan2(Math.sin(this.bird.yaw - heading), Math.cos(this.bird.yaw - heading)),
+    };
   }
 
   placeCamera(snap, dt = 0) {
@@ -304,7 +353,8 @@ export class Game {
       canLand: this.bird.state === 'flying' && p.y - this.tiles.surfaceAt(p.x, p.z) < LAND_RANGE,
       level: this.progress.level,
       levelProgress: this.progress.levelProgress,
-      compass: this.discoveries.compass,
+      compass: [this.homeMark(), ...this.discoveries.compass].filter(Boolean),
+      carrying: this.bird.carrying,
       yaw: this.bird.yaw,
     });
     this.hudFlags = {};
@@ -319,6 +369,7 @@ export class Game {
     this.tiles?.dispose();
     this.food.dispose();
     this.discoveries.dispose();
+    this.nests?.dispose();
     this.progress.flush();
     this.disposeComposer();
     this.lighting.dispose();

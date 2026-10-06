@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /**
  * Procedural bird built from a species' `look`. Faces -z, about 2 m wingspan at scale 1 (game scale:
@@ -60,6 +61,13 @@ export function buildBirdModel(look) {
     head.add(eye);
   }
 
+  // A twig carried crosswise in the beak while building a nest; hidden until a branch is picked up.
+  const twig = new THREE.Mesh(createBranchGeometry(0.7), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
+  twig.rotation.set(0, Math.PI / 2, 0.15);
+  twig.position.set(0, -0.04, -0.12 - beakLength * 0.6);
+  twig.visible = false;
+  head.add(twig);
+
   // Tail on its own joint so it can fan out and tilt.
   const tail = new THREE.Group();
   tail.position.set(0, 0.02, length * 0.42);
@@ -106,7 +114,7 @@ export function buildBirdModel(look) {
   });
   // Distance from the body's centre to the feet when standing, for perching on surfaces.
   const standHeight = (0.13 + 0.17) * look.scale;
-  return { root, rig: { wings, tail, head, legs, standHeight } };
+  return { root, rig: { wings, tail, head, legs, twig, standHeight } };
 }
 
 /**
@@ -260,4 +268,27 @@ function tailGeometry(look) {
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   return geometry;
+}
+
+/**
+ * A small forked branch along the z axis, `length` metres long, with a couple of leaves.
+ * Shared with nests, which are built from the same branches.
+ */
+export function createBranchGeometry(length = 0.8) {
+  const bark = 0x6b4a2f, leaf = 0x5f8f3a;
+  const coloured = (geometry, hex) => {
+    const c = new THREE.Color(hex);
+    const colours = new Float32Array(geometry.attributes.position.count * 3);
+    for (let i = 0; i < colours.length; i += 3) c.toArray(colours, i);
+    geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    return geometry.toNonIndexed();
+  };
+  const parts = [
+    coloured(new THREE.CylinderGeometry(0.014, 0.022, length, 5).rotateX(Math.PI / 2), bark),
+    coloured(new THREE.CylinderGeometry(0.008, 0.012, length * 0.4, 4).rotateX(Math.PI / 2).rotateY(0.6)
+      .translate(length * 0.1, 0, -length * 0.22), bark),
+    coloured(new THREE.SphereGeometry(0.05, 5, 4).scale(1, 0.3, 1.8).translate(length * 0.2, 0.01, -length * 0.4), leaf),
+    coloured(new THREE.SphereGeometry(0.04, 5, 4).scale(1, 0.3, 1.8).translate(-0.03, 0.01, length * 0.42), leaf),
+  ];
+  return mergeGeometries(parts);
 }
