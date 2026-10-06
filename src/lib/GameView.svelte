@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { Game, QUALITY } from '../game/Game.js';
   import { WEATHER } from '../game/weather.js';
+  import TouchControls from './TouchControls.svelte';
+  import Journal from './Journal.svelte';
 
   let { place, demo = false, species, mode, progress, onexit, onalbum } = $props();
 
@@ -17,6 +19,11 @@
   let notes = $state([]);
   let board = $state(null); // challenge offers while the board is open
   let volume = $state(+loadSetting('volume', '0.7'));
+  let invertClimb = $state(loadSetting('invertClimb', 'no') === 'yes');
+  let cameraDistance = $state(+loadSetting('cameraDistance', '9'));
+  let journalOpen = $state(false);
+  // Touch controls on phones and tablets (or as soon as someone touches the screen).
+  let touch = $state(typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches);
   let muted = $state(false);
   let hideHelpTimer;
   let noteId = 0;
@@ -48,11 +55,23 @@
       },
     });
     game.sound.setVolume(volume);
+    game.input.invertClimb = invertClimb;
+    game.cameraDistance = cameraDistance;
+    game.input.onButton = (button) => {
+      if (status.state !== 'ready' || journalOpen) return;
+      if (button === 'pause') {
+        if (board) closeBoard();
+        else setPaused(!paused);
+      } else if (button === 'challenges' && !paused && !board) openBoard();
+    };
+    const touched = () => (touch = true);
+    window.addEventListener('touchstart', touched, { once: true });
     // Browsers only start audio after a gesture; any key or click will do.
     const unlock = () => game.sound.unlock();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
     return () => {
+      window.removeEventListener('touchstart', touched);
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
       clearTimeout(bumpTimer);
@@ -94,6 +113,28 @@
     quality = value;
     game.setQuality(value);
     saveSetting('quality', value);
+  }
+
+  function setInvert(value) {
+    invertClimb = value;
+    game.input.invertClimb = value;
+    saveSetting('invertClimb', value ? 'yes' : 'no');
+  }
+
+  function setCameraDistance(value) {
+    cameraDistance = value;
+    game.cameraDistance = value;
+    saveSetting('cameraDistance', String(value));
+  }
+
+  function openJournal() {
+    journalOpen = true;
+    game.setPaused(true);
+  }
+
+  function closeJournal() {
+    journalOpen = false;
+    game.setPaused(paused || !!board);
   }
 
   function setWeather(value) {
@@ -188,7 +229,11 @@
   const CARDINALS = [['N', 0], ['E', -Math.PI / 2], ['S', Math.PI], ['W', Math.PI / 2]];
 
   function onkeydown(e) {
-    if (status.state !== 'ready') return;
+    if (status.state !== 'ready' || journalOpen) return;
+    if (e.key === 'j' || e.key === 'J') {
+      openJournal();
+      return;
+    }
     if (board) {
       if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') closeBoard();
       return;
@@ -213,7 +258,7 @@
 
 <svelte:window {onkeydown} />
 
-<div class="game">
+<div class="game" class:touch={touch && status.state === 'ready'}>
   <canvas bind:this={canvas}></canvas>
 
   <div class="hud top">
@@ -222,7 +267,7 @@
       <span><b>{Math.round(hud.altitude)}</b> m</span>
       <span><b>{Math.round(hud.speed)}</b> km/h</span>
       {#if hud.time != null}<span title="Local solar time">{formatHour(hud.time)}</span>{/if}
-      {#if hud.weather}<span>{hud.weather}</span>{/if}
+      {#if hud.weather}<span class="weather">{hud.weather}</span>{/if}
     </div>
     {#if hud.level}
       <div class="level" title="Experience">
@@ -286,9 +331,13 @@
         <div class="prompt">Carrying a branch · land to drop it (within 2 m of a nest to add to it)</div>
       {/if}
       {#if hud.state === 'perched'}
-        <div class="prompt">Resting · <kbd>Space</kbd> or <kbd>W</kbd> to take off · <kbd>A</kbd><kbd>D</kbd> to turn</div>
+        {#if touch}
+          <div class="prompt">Resting · Flap or push the stick up to take off</div>
+        {:else}
+          <div class="prompt">Resting · <kbd>Space</kbd> or <kbd>W</kbd> to take off · <kbd>A</kbd><kbd>D</kbd> to turn</div>
+        {/if}
       {:else if hud.canLand}
-        <div class="prompt"><kbd>E</kbd> to land</div>
+        <div class="prompt">{#if touch}Tap Land to land{:else}<kbd>E</kbd> to land{/if}</div>
       {/if}
       <div class="meter stamina" class:low={hud.stamina < 0.2} title="Stamina: flapping uses it, gliding and resting restore it">
         <span>Stamina</span><div><i style="width: {hud.stamina * 100}%"></i></div>
@@ -312,7 +361,7 @@
         <button onclick={onexit}>Choose another place</button>
       {/if}
     </div>
-  {:else if showHelp && !paused}
+  {:else if showHelp && !paused && !touch}
     <div class="help">
       <div><kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> bank &amp; turn</div>
       <div><kbd>W</kbd><kbd>S</kbd> / <kbd>↑</kbd><kbd>↓</kbd> climb &amp; descend</div>
@@ -322,7 +371,8 @@
       <div>Fly through a tree for a branch, then land to build a nest</div>
       <div><kbd>C</kbd> challenges · <kbd>M</kbd> sound on/off</div>
       <div><kbd>[</kbd><kbd>]</kbd> time of day · scroll to zoom</div>
-      <div><kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>
+      <div><kbd>J</kbd> journal · <kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>
+      <div class="muted-help">Gamepads work too: left stick, A flap, right trigger dive, B land</div>
     </div>
   {/if}
 
@@ -367,6 +417,14 @@
           <span>Volume <b>{muted ? 'muted' : `${Math.round(volume * 100)}%`}</b></span>
           <input type="range" min="0" max="1" step="0.05" value={volume} oninput={(e) => setVolume(+e.currentTarget.value)} />
         </label>
+        <label class="check">
+          <input type="checkbox" checked={invertClimb} onchange={(e) => setInvert(e.currentTarget.checked)} />
+          <span>Invert up/down (push forward to climb)</span>
+        </label>
+        <label>
+          <span>Camera distance <b>{Math.round(cameraDistance)} m</b></span>
+          <input type="range" min="4" max="30" step="1" value={cameraDistance} oninput={(e) => setCameraDistance(+e.currentTarget.value)} />
+        </label>
         <label>
           <span>Graphics</span>
           <select value={quality} onchange={(e) => setQuality(e.currentTarget.value)}>
@@ -377,12 +435,21 @@
         </label>
       </div>
       <button onclick={() => setPaused(false)}>Resume</button>
+      <button class="secondary" onclick={openJournal}>Journal</button>
       <button class="secondary" onclick={onalbum}>Change bird</button>
       <button class="secondary" onclick={onexit}>Choose another place</button>
     </div>
   {/if}
 
   <button class="exit" onclick={onexit} title="Choose another place">New place</button>
+
+  {#if touch && status.state === 'ready' && !paused && !board && !journalOpen}
+    <TouchControls input={game.input} onpause={() => setPaused(true)} onchallenges={openBoard} />
+  {/if}
+
+  {#if journalOpen}
+    <Journal {progress} onclose={closeJournal} />
+  {/if}
 
   {#if status.state === 'ready' && hud.time != null}
     {@const sun = arcPoint(hud.time)}
@@ -409,6 +476,7 @@
         <circle cx={sun.x} cy={sun.y} r="8" class="sun" />
       </svg>
       <div class="sky-row">
+        {#if touch && hud.tiles?.loading}<span class="dot" title="Map tiles still loading around you"></span>{/if}
         <span class="clock">{formatHour(hud.time)}</span>
         <!-- Blur after a click so Space (flap) and the arrow keys go back to flying. -->
         <button class="chip" onclick={(e) => { resetTime(); e.currentTarget.blur(); }} title="Back to the real time at this place">Now</button>
@@ -992,6 +1060,21 @@
     accent-color: #f0b429;
   }
 
+  .settings label.check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .settings label.check span {
+    display: inline;
+  }
+
+  .muted-help {
+    opacity: 0.75;
+    font-size: 0.8rem;
+  }
+
   .settings select {
     padding: 0.4rem 0.5rem;
     border: none;
@@ -1023,4 +1106,95 @@
   .attribution a {
     color: inherit;
   }
+  /* Phones and narrow windows: the top bar stacks, so the compass and panels move down below it. */
+  @media (max-width: 720px) {
+    .place {
+      font-size: 1.1rem;
+    }
+
+    .stats {
+      gap: 0.6rem;
+      font-size: 0.85rem;
+    }
+
+    .stats b {
+      font-size: 1rem;
+    }
+
+    .stats .weather {
+      display: none;
+    }
+
+    .compass {
+      top: 104px;
+      width: min(460px, calc(100vw - 48px));
+    }
+
+    .mark small {
+      font-size: 0.62rem;
+    }
+
+    .hawk {
+      top: 166px;
+    }
+
+    .challenge {
+      top: 190px;
+    }
+
+    .notes {
+      top: 190px;
+    }
+
+    .note {
+      max-width: min(320px, 60vw);
+      font-size: 0.8rem;
+    }
+  }
+
+  /* Touch screens: Menu holds "Choose another place", the sky controls shrink to their chips at the
+     top right, and the meters sit low between the joystick and the buttons. */
+  .touch .exit {
+    display: none;
+  }
+
+  .touch .tiles {
+    display: none; /* a dot in the sky row instead */
+  }
+
+  .touch .sky-controls {
+    top: 56px;
+    bottom: auto;
+    width: auto;
+  }
+
+  .touch .arc,
+  .touch .sky-controls .clock {
+    display: none;
+  }
+
+  .touch .meters {
+    bottom: 28px;
+    max-width: calc(100vw - 32px);
+  }
+
+  .touch .meter {
+    grid-template-columns: 44px min(140px, 32vw);
+  }
+
+  .touch .prompt {
+    max-width: 52vw;
+    text-align: center;
+  }
+
+  .touch .notes {
+    top: 136px;
+  }
+
+  @media (max-width: 720px) {
+    .touch .notes {
+      top: 190px;
+    }
+  }
+
 </style>

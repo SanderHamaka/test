@@ -27,9 +27,15 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | `E` | Land on the roof or ground below you; `Space` or `W` takes off again |
 | Mouse wheel | Camera distance |
 | `C` | Challenge board: start or abandon a challenge |
+| `J` | Journal: level, birds, badges, records, meals, nests and discovered places |
 | `M` | Sound on/off (volume is in the pause menu) |
 | `[` `]` | Time of day −/+ 30 minutes (or drag the sun along the arc, bottom right) |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
+
+**Gamepads** work as well (standard layout): left stick to steer and climb, `A` flap, right trigger dive,
+`B` land, `Y` challenges, `Start` pause. **On phones and tablets** on-screen controls appear: a joystick on
+the left, Flap, Dive and Land on the right, and Challenges and Menu at the top. The time and weather chips
+stay at the top right; the pause menu has the rest.
 
 You also land by simply coming down onto a roof or the ground nose-first (or slowly), or by clipping the
 top of a wall. Flying level over a roof skims it instead.
@@ -66,6 +72,17 @@ weather there (from [Open-Meteo](https://open-meteo.com)); the weather button cy
 overcast, rain, storm and fog. Wind drifts the clouds and the rain and gently carries you. Cloud banks float
 at a few hundred metres and you can fly into them. At night the street lights come on: mapped lamps from
 OSM where there are any, otherwise lamps along the roads.
+
+**Journal and badges.** The journal (`J`, or from the album and the pause menu) keeps everything you've done:
+your level, which birds are unlocked, records (top speed, highest flight, fastest street race, hawks shaken
+off), meals per food type, your nests and every place you discovered. Badges reward milestones such as
+discovering 5 and 25 places, tasting every kind of food, building a 30-branch nest, a minute of flying
+at night or in a storm, diving at 200 km/h
+and climbing 400 m above the ground; each is worth bonus XP. *Start over…* at the bottom of the journal
+wipes your progress after a confirmation.
+
+**Settings** (pause menu, saved in the browser): time of day, weather, volume, invert up/down, camera
+distance and graphics quality. If the game runs slowly at a higher setting, it suggests a lower one.
 
 **Sound** is generated in the browser (no audio files): wind that rises with speed, wing beats, city hum,
 waves near water, birdsong near trees by day, crickets at night, and effects for everything you do.
@@ -159,4 +176,4 @@ a commercial or self-hosted tile provider.
 - [x] **Phase 4a: the game.** Species album, procedural birds, stamina and landing, food from the map,
       landmark discovery, XP and levels, challenge mode, touchdown landings, nest building and a home.
 - [x] **Phase 4b.** Hawk, optional challenges (street races, landmark sprints, feeding the chicks), sound.
-- [ ] **Phase 5: polish.** Touch and gamepad controls, settings, saving progress.
+- [x] **Phase 5: polish.** Touch and gamepad controls, journal, badges and records, settings, phone layout.

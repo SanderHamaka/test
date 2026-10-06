@@ -16,6 +16,7 @@ import { FarTerrain } from './farTerrain.js';
 import { Clouds } from './clouds.js';
 import { Rain } from './rain.js';
 import { WEATHER, WeatherState, fetchRealWeather } from './weather.js';
+import { BADGES, BADGE_XP } from './badges.js';
 import { Input } from './Input.js';
 import { Lighting, SKY_SIZE } from './Lighting.js';
 import { LOAD_DISTANCE, TileManager, resolveOriginElevation } from './TileManager.js';
@@ -64,6 +65,9 @@ export class Game {
     this.surroundings = null;
     this.surroundingsTimer = 0;
     this.lastBeat = 0;
+    this.flightLog = { nightSeconds: 0, stormSeconds: 0 };
+    this.badgeTimer = 2;
+    this.fps = { average: 60, slowFor: 0, tipped: false };
     this.progress = progress;
     this.paused = false;
     this.ready = false;
@@ -147,7 +151,7 @@ export class Game {
     this.nests = new Nests(this.scene, this.prepareMaterial, this.progress, this.tiles.projection, elevation);
     this.challenges = new Challenges(this.scene, this.prepareMaterial, {
       tiles: this.tiles, nests: this.nests, discoveries: this.discoveries, species: this.bird.species,
-      notify: this.onNotify, reward: (xp) => this.gameplay.reward(xp), sound: this.sound,
+      notify: this.onNotify, reward: (xp) => this.gameplay.reward(xp), sound: this.sound, progress: this.progress,
     });
 
     // Start at your nest if you have one near this place, otherwise above the place itself.
@@ -272,10 +276,13 @@ export class Game {
 
   frame(time) {
     this.timer.update(time);
-    const dt = Math.min(this.timer.getDelta(), 1 / 20);
+    const frameTime = this.timer.getDelta();
+    const dt = Math.min(frameTime, 1 / 20);
     const focus = this.ready ? this.bird.position : this.spawnPoint ?? new THREE.Vector3(0, 0, 60);
 
     if (this.tiles) this.tiles.update(focus, this.paused ? 0 : dt);
+    if (this.paused) this.input.pollGamepad(); // so Start can unpause
+    this.trackFrameRate(frameTime);
     this.far?.update(focus);
 
     if (this.ready && !this.paused) {
@@ -404,6 +411,37 @@ export class Game {
     });
   }
 
+  /** Once per session, suggests lower graphics if the frame rate stays low on a demanding setting. */
+  trackFrameRate(dt) {
+    const f = this.fps;
+    if (!this.ready || this.paused || dt <= 0) return;
+    f.average += (1 / dt - f.average) * 0.05;
+    f.slowFor = f.average < 28 ? f.slowFor + dt : 0;
+    if (f.slowFor > 8 && !f.tipped && this.quality !== QUALITY.low) {
+      f.tipped = true;
+      this.onNotify('Running slowly? Try lower graphics in the Esc menu.', 'hint-long');
+    }
+  }
+
+  /** Badges are checked every couple of seconds against progress and the current flight. */
+  checkBadges(dt) {
+    const bird = this.bird;
+    if (bird.state === 'flying') {
+      if (this.lighting.uniforms.night.value > 0.8) this.flightLog.nightSeconds += dt;
+      if (this.weather.preset === 'storm' && this.weather.current.rain > 0.8) this.flightLog.stormSeconds += dt;
+    }
+    this.badgeTimer -= dt;
+    if (this.badgeTimer > 0) return;
+    this.badgeTimer = 2;
+    for (const badge of BADGES) {
+      if (this.progress.badges[badge.id] || !badge.test(this.progress, this.flightLog)) continue;
+      if (this.progress.earn(badge.id)) {
+        this.onNotify(`Badge earned: ${badge.name}! +${BADGE_XP} XP`, 'level');
+        this.gameplay.reward(BADGE_XP);
+      }
+    }
+  }
+
   /** One step of game logic: flight, food, discoveries, nests, the hawk, challenges and rules. */
   simulate(dt, input) {
     this.elapsed = (this.elapsed ?? 0) + dt;
@@ -423,6 +461,7 @@ export class Game {
     const found = this.discoveries.update(dt, bird);
     if (this.gameplay.update(dt, events, eaten, found).faint) this.respawn();
     this.challenges.update(dt, bird, events);
+    this.checkBadges(dt);
     this.updateHawk(dt);
 
     if (events.bump) {
@@ -538,8 +577,10 @@ export class Game {
     if (this.hudTimer < 0.1) return;
     this.hudTimer = 0;
     const p = this.bird.position;
+    const altitude = p.y - this.tiles.surfaceAt(p.x, p.z);
+    this.progress.recordFlight(this.bird.speed * 3.6, altitude);
     this.onHud({
-      altitude: p.y - this.tiles.surfaceAt(p.x, p.z),
+      altitude,
       speed: this.bird.speed * 3.6,
       bump: !!this.hudFlags.bump,
       tiles: this.tiles.status,

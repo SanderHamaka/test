@@ -64,7 +64,7 @@ export class Discoveries {
       const dx = landmark.x - p.x, dz = landmark.z - p.z;
       const distance = Math.hypot(dx, dz);
       if (distance < DISCOVER_RADIUS && p.y - landmark.y < DISCOVER_MAX_HEIGHT) {
-        if (this.progress.discover(landmark.id)) found.push(landmark);
+        if (this.progress.discover(landmark.id, landmark)) found.push(landmark);
         continue;
       }
       if (distance < COMPASS_RANGE) {

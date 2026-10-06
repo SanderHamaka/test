@@ -23,6 +23,9 @@ export class Progress {
     this.eaten = saved.eaten ?? {};
     this.nests = saved.nests ?? []; // [{ id, lat, lon, elevation, branches }]
     this.hints = new Set(saved.hints ?? []); // one-time tips already shown
+    this.places = saved.places ?? {}; // landmark id → { name, kind, at } for the journal
+    this.records = { challenges: {}, bestRace: null, hawkEscapes: 0, topSpeed: 0, topHeight: 0, ...saved.records };
+    this.badges = saved.badges ?? {}; // badge id → time earned
     this.lastSpecies = saved.lastSpecies ?? 'gull';
     this.lastMode = saved.lastMode ?? 'relaxed';
     this.saveTimer = null;
@@ -62,11 +65,55 @@ export class Progress {
     return lost;
   }
 
-  discover(id) {
+  /** Records a discovered landmark; returns false if it was already known. */
+  discover(id, info) {
     if (this.discovered.has(id)) return false;
     this.discovered.add(id);
+    if (info) this.places[id] = { name: info.name, kind: info.kind, at: Date.now() };
     this.save();
     return true;
+  }
+
+  recordChallenge(type, seconds) {
+    const r = this.records;
+    r.challenges[type] = (r.challenges[type] ?? 0) + 1;
+    if (type === 'race' && (r.bestRace == null || seconds < r.bestRace)) r.bestRace = Math.round(seconds);
+    this.save();
+  }
+
+  recordHawkEscape() {
+    this.records.hawkEscapes++;
+    this.save();
+  }
+
+  /** Keeps personal bests for speed (km/h) and height above ground (m); saves only on a real improvement. */
+  recordFlight(speed, height) {
+    const r = this.records;
+    if (speed > r.topSpeed + 1 || height > r.topHeight + 5) {
+      r.topSpeed = Math.max(r.topSpeed, Math.round(speed));
+      r.topHeight = Math.max(r.topHeight, Math.round(height));
+      this.save();
+    }
+  }
+
+  earn(badge) {
+    if (this.badges[badge]) return false;
+    this.badges[badge] = Date.now();
+    this.save();
+    return true;
+  }
+
+  /** Starts over: XP, discoveries, nests, records and badges. Settings are kept. */
+  reset() {
+    this.xp = 0;
+    this.discovered.clear();
+    this.eaten = {};
+    this.nests.length = 0;
+    this.hints.clear();
+    this.places = {};
+    this.records = { challenges: {}, bestRace: null, hawkEscapes: 0, topSpeed: 0, topHeight: 0 };
+    this.badges = {};
+    this.flush();
   }
 
   countMeal(type) {
@@ -102,6 +149,9 @@ export class Progress {
         eaten: this.eaten,
         nests: this.nests,
         hints: [...this.hints],
+        places: this.places,
+        records: this.records,
+        badges: this.badges,
         lastSpecies: this.lastSpecies,
         lastMode: this.lastMode,
       }));

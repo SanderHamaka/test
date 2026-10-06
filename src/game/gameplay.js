@@ -73,6 +73,7 @@ export class Gameplay {
   }
 
   hawkEscaped() {
+    this.progress.recordHawkEscape();
     this.notify('You shook off the hawk! +15 XP', 'discovery');
     this.reward(15);
   }

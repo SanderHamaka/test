@@ -17,8 +17,8 @@ const VISIBLE_RINGS = 3;
  *  - feed:   bring food to your home nest; flying through food carries it instead of eating it
  */
 export class Challenges {
-  constructor(scene, prepareMaterial, { tiles, nests, discoveries, species, notify, reward, sound }) {
-    Object.assign(this, { scene, tiles, nests, discoveries, species, notify, reward, sound });
+  constructor(scene, prepareMaterial, { tiles, nests, discoveries, species, notify, reward, sound, progress }) {
+    Object.assign(this, { scene, tiles, nests, discoveries, species, notify, reward, sound, progress });
     this.active = null;
     this.rings = new THREE.Group();
     scene.add(this.rings);
@@ -126,6 +126,7 @@ export class Challenges {
   }
 
   succeed(xp) {
+    this.progress?.recordChallenge(this.active.type, this.active.elapsed);
     this.notify(`${this.active.title} complete! +${xp} XP`, 'level');
     this.sound.play('success');
     this.reward(xp);

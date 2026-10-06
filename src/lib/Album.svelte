@@ -2,12 +2,14 @@
   import { onMount } from 'svelte';
   import { SPECIES, FOOD_LABELS } from '../game/species.js';
   import { renderPortraits } from '../game/portraits.js';
+  import Journal from './Journal.svelte';
 
   let { place, progress, onfly, onback } = $props();
 
   let portraits = $state({});
   let selected = $state(SPECIES.find((s) => s.id === progress.lastSpecies && progress.isUnlocked(s))?.id ?? 'gull');
   let mode = $state(progress.lastMode);
+  let journalOpen = $state(false);
 
   onMount(() => {
     // Rendering the portraits takes a moment; let the page paint first.
@@ -33,12 +35,15 @@
 <main class="album">
   <header>
     <button class="back" onclick={onback}>← {place.name}</button>
+    <button class="back" onclick={() => (journalOpen = true)}>Journal</button>
     <div class="level">
       <span>Level {level}</span>
       <div class="xp"><div style="width: {progress.levelProgress * 100}%"></div></div>
       <small>{progress.discovered.size} places discovered</small>
     </div>
   </header>
+
+  {#if journalOpen}<Journal {progress} onclose={() => (journalOpen = false)} />{/if}
 
   <h1><span class="brand">Birb</span> Choose your bird</h1>
 
