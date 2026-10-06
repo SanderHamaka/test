@@ -197,6 +197,7 @@
       <div><kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> bank &amp; turn</div>
       <div><kbd>W</kbd><kbd>S</kbd> / <kbd>↑</kbd><kbd>↓</kbd> climb &amp; descend</div>
       <div><kbd>Space</kbd> flap &nbsp; <kbd>Shift</kbd> dive &nbsp; <kbd>E</kbd> land</div>
+      <div>Come down onto a roof (or press <kbd>E</kbd>) to land</div>
       <div>Fly through food to eat · follow the compass to discover places</div>
       <div><kbd>[</kbd><kbd>]</kbd> time of day · scroll to zoom</div>
       <div><kbd>H</kbd> help · <kbd>Esc</kbd> pause &amp; settings</div>

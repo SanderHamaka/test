@@ -255,6 +255,7 @@ export class Game {
     const found = this.discoveries.update(dt, this.bird);
     if (this.gameplay.update(dt, events, eaten, found).faint) this.spawn(this.spawnPoint);
     if (events.bump) this.shake = 1;
+    if (events.hardLanding) this.shake = 0.5;
     Object.assign(this.hudFlags, events);
   }
 

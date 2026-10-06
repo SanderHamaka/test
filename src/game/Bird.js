@@ -9,6 +9,11 @@ const MAX_HEIGHT_ABOVE_GROUND = 700;
 export const LAND_RANGE = 12; // how close above a surface the bird must be to land
 const LAND_TIME = 0.7;
 const STAMINA_REGEN = { gliding: 3, perched: 22 };
+// Touching a surface counts as landing when coming down nose-first or slowly; level flight skims.
+const TOUCH_LAND_PITCH = -0.08;
+const TOUCH_LAND_SPEED = 12;
+// Hitting a wall this close below the roof edge hops the bird up onto the roof.
+const LEDGE_HOP = 2.5;
 
 /**
  * Arcade flight: the bird always moves forward, steering banks it into turns, diving trades height
@@ -35,6 +40,7 @@ export class Bird {
     this.staminaRegenFactor = 1; // lowered by hunger in challenge mode
     this.canFlap = true; // false when starving in challenge mode
     this.flapping = false;
+    this.touchGrace = 0; // seconds after take-off during which touching a surface doesn't land
     this.anim = { phase: 0, flap: 0, tuck: 0, perch: 0, headTurn: 0, tailSpread: 0 };
   }
 
@@ -74,12 +80,12 @@ export class Bird {
   updateFlying(dt, input, world, events) {
     const s = this.stats;
     const previous = this.position.clone();
+    this.touchGrace = Math.max(0, this.touchGrace - dt);
 
     if (input.land) {
       const surface = world.surfaceAt(this.position.x, this.position.z);
       if (this.position.y - surface < LAND_RANGE) {
-        this.state = 'landing';
-        this.landing = { t: 0, fromY: this.position.y, speed: this.speed };
+        this.startLanding(this.speed);
         return;
       }
       events.tooHighToLand = true;
@@ -112,8 +118,26 @@ export class Bird {
     const sink = this.flapping ? -s.lift : s.sink * 1.4 * (1 - Math.min(this.speed / 35, 0.7));
     this.position.y -= sink * dt;
 
-    this.keepAboveGround(dt, world.groundAt(this.position.x, this.position.z));
-    this.collide(previous, world, events);
+    this.keepAboveGround(dt, world.groundAt(this.position.x, this.position.z), events);
+    if (this.state === 'flying') this.collide(previous, world, events);
+  }
+
+  /** Begins the landing animation; `speed` is how fast the bird drifts forward while settling. */
+  startLanding(speed) {
+    this.state = 'landing';
+    this.landing = { t: 0, fromY: this.position.y, speed };
+  }
+
+  /** Whether touching a surface right now should count as landing rather than skimming. */
+  get wantsToLand() {
+    if (this.touchGrace > 0) return false;
+    return this.pitch < TOUCH_LAND_PITCH || this.speed < TOUCH_LAND_SPEED;
+  }
+
+  /** Lands after touching a surface; a fast touchdown is reported so the camera can shake. */
+  touchDown(events, drift) {
+    if (this.speed > 25) events.hardLanding = true;
+    this.startLanding(Math.min(this.speed, drift));
   }
 
   updateLanding(dt, world, events) {
@@ -144,18 +168,23 @@ export class Bird {
 
     if ((input.flap && this.canFlap) || input.climb > 0 || input.land) {
       this.state = 'flying';
-      this.speed = this.stats.cruise * 0.7;
+      this.speed = Math.max(this.stats.cruise * 0.7, TOUCH_LAND_SPEED + 1);
       this.pitch = 0.55;
-      this.position.y += 0.4;
+      this.position.y += 0.5;
+      this.touchGrace = 0.8;
       events.tookOff = true;
     }
   }
 
-  keepAboveGround(dt, ground) {
+  keepAboveGround(dt, ground, events) {
     const p = this.position;
     if (p.y > ground + MAX_HEIGHT_ABOVE_GROUND) p.y = ground + MAX_HEIGHT_ABOVE_GROUND;
     if (p.y < ground + this.radius) {
       p.y = ground + this.radius;
+      if (this.wantsToLand) {
+        this.touchDown(events, 6);
+        return;
+      }
       if (this.pitch < 0) this.pitch = 0;
       this.speed = Math.max(MIN_SPEED, this.speed - 10 * dt);
     }
@@ -165,12 +194,19 @@ export class Bird {
     const p = this.position;
     const r = this.radius;
     world.forEachBuildingAt(p.x, p.z, (bottom, top, colliders, index) => {
-      if (p.y < bottom - r || p.y > top + r) return;
+      if (this.state !== 'flying' || p.y < bottom - r || p.y > top + r) return;
 
       if (previous.y >= top) {
-        // Came from above: skim along the roof.
+        // Came from above: land if heading down, otherwise skim along the roof.
         p.y = top + r;
-        if (this.pitch < 0) this.pitch = 0;
+        if (this.wantsToLand) this.touchDown(events, 6);
+        else if (this.pitch < 0) this.pitch = 0;
+        return;
+      }
+
+      if (top - p.y < LEDGE_HOP && p.y > bottom) {
+        // Clipped the top of a wall: hop up onto the roof instead of bouncing off.
+        this.touchDown(events, 4);
         return;
       }
 

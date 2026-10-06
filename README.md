@@ -25,6 +25,9 @@ button on the start screen runs the same pipeline on generated data, which is ha
 | `Space` (hold) | Flap: thrust and lift |
 | `Shift` (hold) | Dive: tuck wings, fast descent |
 | `E` | Land on the roof or ground below you; `Space` or `W` takes off again |
+
+You also land by simply coming down onto a roof or the ground nose-first (or slowly), or by clipping the
+top of a wall. Flying level over a roof skims it instead.
 | Mouse wheel | Camera distance |
 | `[` `]` | Time of day −/+ 30 minutes |
 | `H` / `Esc` | Help / pause and settings (time of day, graphics quality) |
